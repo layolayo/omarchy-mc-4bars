@@ -78,6 +78,36 @@ def validate_plugin_id(raw: str) -> str:
     return val
 
 
+PLUGIN_SHORT_ALIASES = {
+    "omarchygotchi": "creaza.tamagotchi",
+    "tamagotchi": "creaza.tamagotchi",
+    "omagames": "david.omagames",
+}
+
+
+def resolve_plugin_id(cfg: dict, raw: str) -> str:
+    val = validate_plugin_id(raw)
+    low = val.lower()
+    if low in PLUGIN_SHORT_ALIASES:
+        return PLUGIN_SHORT_ALIASES[low]
+    # Check exact or suffix match in configured bars
+    for slot_key, _def_pos, _label in BAR_SLOTS:
+        layout = cfg.get(slot_key, {}).get("layout", {})
+        for sec in SECTIONS:
+            for item in layout.get(sec, []):
+                eid = entry_id(item)
+                if eid == val:
+                    return eid
+    for slot_key, _def_pos, _label in BAR_SLOTS:
+        layout = cfg.get(slot_key, {}).get("layout", {})
+        for sec in SECTIONS:
+            for item in layout.get(sec, []):
+                eid = entry_id(item)
+                if eid.lower().endswith("." + low) or eid.lower() == low:
+                    return eid
+    return val
+
+
 def resolve_section(raw: str) -> str:
     key = (raw or "").strip().lower()
     if key not in SECTION_ALIASES:
@@ -257,12 +287,12 @@ def parse_move_flags(args: list):
 
 
 def cmd_move(plugin_id_raw: str, section_raw: str, extra_args: list, target_bar_or_edge: str = "bottomBar") -> None:
-    plugin_id = validate_plugin_id(plugin_id_raw)
     sec = resolve_section(section_raw)
     before, after, index = parse_move_flags(extra_args)
 
     cfg = load_config()
     ensure_all_bars(cfg)
+    plugin_id = resolve_plugin_id(cfg, plugin_id_raw)
     dest_slot = resolve_bar_slot(cfg, target_bar_or_edge)
     rescan_needed = ensure_plugin_enabled(cfg, PLUGIN_ID)
 

@@ -72,13 +72,6 @@ Item {
     onFileChanged: reload()
   }
 
-  Connections {
-    target: root.shell
-    function onBarConfigChanged() {
-      root.onHostBarConfigChanged()
-    }
-  }
-
   function defaultPositionFor(slotKey) {
     if (slotKey === "bar") return "top"
     if (slotKey === "bottomBar") return "bottom"
@@ -108,28 +101,42 @@ Item {
     return config
   }
 
+  function findUnoccupiedEdge(config) {
+    var allEdges = ["top", "bottom", "left", "right"]
+    var slots = ["bar", "bottomBar", "leftBar", "rightBar"]
+    var used = ({})
+    for (var i = 0; i < slots.length; i++) {
+      var k = slots[i]
+      if (Util.isPlainObject(config[k])) {
+        var pos = BarModel.normalizePosition(config[k].position || defaultPositionFor(k))
+        used[pos] = true
+      }
+    }
+    for (var j = 0; j < allEdges.length; j++) {
+      if (!used[allEdges[j]]) return allEdges[j]
+    }
+    return ""
+  }
+
   Timer {
     id: hostReloadTimer
-    interval: 60
+    interval: 80
     repeat: false
     onTriggered: Util.execArgv(["omarchy-shell", "-q", "shell", "reloadConfig"])
   }
 
   function readCurrentConfig() {
-    var base = null
-    if (Util.isPlainObject(root.cachedConfig)) {
-      base = JSON.parse(JSON.stringify(root.cachedConfig))
-    } else {
-      var raw = String(coordinatorConfigFile.text() || "").trim()
-      if (raw) {
-        try {
-          var parsed = JSON.parse(raw)
-          if (Util.isPlainObject(parsed)) base = parsed
-        } catch (e) {}
-      }
+    var raw = String(coordinatorConfigFile.text() || "").trim()
+    if (raw) {
+      try {
+        var parsed = JSON.parse(raw)
+        if (Util.isPlainObject(parsed)) return ensureAllBarSlots(parsed)
+      } catch (e) {}
     }
-    if (!base) return null
-    return ensureAllBarSlots(base)
+    if (Util.isPlainObject(root.cachedConfig)) {
+      return ensureAllBarSlots(JSON.parse(JSON.stringify(root.cachedConfig)))
+    }
+    return null
   }
 
   function applyConfigToSecondaryBars(config) {
@@ -156,16 +163,20 @@ Item {
     }
   }
 
-  function onHostBarConfigChanged() {
+  function syncFromDiskConfig() {
     if (root.suppressSwapWatch) return
-    if (!root.shell || !Util.isPlainObject(root.shell.barConfig)) return
-    var primaryEdge = BarModel.normalizePosition(root.shell.barConfig.position || "top")
-    if (root.lastPrimaryEdge !== "" && primaryEdge !== root.lastPrimaryEdge) {
-      var oldEdge = root.lastPrimaryEdge
-      root.lastPrimaryEdge = primaryEdge
-      var config = readCurrentConfig()
-      if (!config) return
-      config.bar.position = primaryEdge
+    var raw = String(coordinatorConfigFile.text() || "").trim()
+    if (!raw) return
+    try {
+      var config = JSON.parse(raw)
+      if (!Util.isPlainObject(config)) return
+      ensureAllBarSlots(config)
+
+      // Only if the Primary Bar ('bar') was moved directly onto a secondary bar's edge
+      // will two bars share the same edge while another edge is unoccupied.
+      // Resolving that collision by moving the displaced secondary bar to the unoccupied
+      // edge is 100% idempotent and can never loop.
+      var primaryEdge = BarModel.normalizePosition((config.bar && config.bar.position) || "top")
       var secondarySlots = ["bottomBar", "leftBar", "rightBar"]
       var conflictSlot = ""
       for (var i = 0; i < secondarySlots.length; i++) {
@@ -176,45 +187,20 @@ Item {
           break
         }
       }
-      if (conflictSlot !== "") {
-        config[conflictSlot].position = oldEdge
-        persistAndApplyConfig(config, false)
-        return
-      }
-      root.cachedConfig = JSON.parse(JSON.stringify(config))
-    }
-    root.lastPrimaryEdge = primaryEdge
-  }
 
-  function syncFromDiskConfig() {
-    if (root.suppressSwapWatch) return
-    var raw = String(coordinatorConfigFile.text() || "").trim()
-    if (!raw) return
-    try {
-      var config = JSON.parse(raw)
-      if (!Util.isPlainObject(config)) return
-      ensureAllBarSlots(config)
-      root.cachedConfig = JSON.parse(JSON.stringify(config))
-      var primaryEdge = BarModel.normalizePosition((config.bar && config.bar.position) || "top")
-      if (root.lastPrimaryEdge !== "" && primaryEdge !== root.lastPrimaryEdge) {
-        var oldEdge = root.lastPrimaryEdge
-        root.lastPrimaryEdge = primaryEdge
-        var secondarySlots = ["bottomBar", "leftBar", "rightBar"]
-        var conflictSlot = ""
-        for (var i = 0; i < secondarySlots.length; i++) {
-          var sKey = secondarySlots[i]
-          var sPos = BarModel.normalizePosition((config[sKey] && config[sKey].position) || defaultPositionFor(sKey))
-          if (sPos === primaryEdge) {
-            conflictSlot = sKey
-            break
-          }
+      if (conflictSlot !== "") {
+        var freeEdge = findUnoccupiedEdge(config)
+        if (!freeEdge && root.lastPrimaryEdge !== "" && root.lastPrimaryEdge !== primaryEdge) {
+          freeEdge = root.lastPrimaryEdge
         }
-        if (conflictSlot !== "") {
-          config[conflictSlot].position = oldEdge
-          persistAndApplyConfig(config, true)
+        if (freeEdge && freeEdge !== primaryEdge) {
+          config[conflictSlot].position = freeEdge
+          persistAndApplyConfig(config, false)
           return
         }
       }
+
+      root.cachedConfig = JSON.parse(JSON.stringify(config))
       root.lastPrimaryEdge = primaryEdge
       applyConfigToSecondaryBars(config)
     } catch (e) {
