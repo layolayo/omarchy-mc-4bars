@@ -411,9 +411,18 @@ def insert_into_section(items: list, entry, before: str = None, after: str = Non
     items.append(entry)
 
 
-def call_ipc(*args: str) -> int:
-    cmd = ["omarchy-shell", PLUGIN_ID, *args]
-    res = subprocess.run(cmd, check=False)
+def call_ipc(*args: str, quiet: bool = False) -> int:
+    cmd = ["omarchy-shell", "-q", PLUGIN_ID, *args] if quiet else ["omarchy-shell", PLUGIN_ID, *args]
+    if quiet:
+        res = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    else:
+        res = subprocess.run(cmd, check=False)
     return res.returncode
 
 
@@ -469,6 +478,30 @@ def run_tui() -> None:
             curses.init_pair(3, curses.COLOR_GREEN, -1)
             curses.init_pair(4, curses.COLOR_YELLOW, -1)
             curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_RED)
+
+        def _put(y: int, x: int, text: str, attr: int = 0) -> None:
+            my, mx = stdscr.getmaxyx()
+            if y < 0 or y >= my or x < 0 or x >= mx - 1:
+                return
+            clipped = text[: max(0, mx - x - 1)]
+            if not clipped:
+                return
+            try:
+                stdscr.addstr(y, x, clipped, attr)
+            except curses.error:
+                pass
+
+        def _tui_reload(touch_primary: bool) -> None:
+            if touch_primary:
+                subprocess.run(
+                    ["omarchy-shell", "-q", "shell", "reloadConfig"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            call_ipc("reloadConfig", quiet=True)
+            stdscr.clear()
 
         bar_idx = 0
         row_idx = 0
@@ -532,10 +565,14 @@ def run_tui() -> None:
             # Top Title Bar with explicit [?] Guide and [q] Quit
             header_left = " MC 4Bars — Interactive Terminal Manager "
             header_right = " [?] Guide/Help   [q] Quit "
-            stdscr.addstr(0, 0, header_left[:max_x - 1], curses.A_BOLD | (curses.color_pair(1) if curses.has_colors() else 0))
+            _put(0, 0, header_left, curses.A_BOLD | (curses.color_pair(1) if curses.has_colors() else 0))
             if max_x > len(header_left) + len(header_right) + 2:
-                stdscr.addstr(0, max_x - len(header_right) - 1, header_right,
-                              curses.A_BOLD | (curses.color_pair(4) if curses.has_colors() else 0))
+                _put(
+                    0,
+                    max_x - len(header_right) - 1,
+                    header_right,
+                    curses.A_BOLD | (curses.color_pair(4) if curses.has_colors() else 0),
+                )
 
             if show_help:
                 guide_lines = [
@@ -573,11 +610,12 @@ def run_tui() -> None:
                     if gy >= max_y - 1:
                         break
                     attr = curses.color_pair(1) | curses.A_BOLD if "──" in gline or "Press ANY KEY" in gline else 0
-                    stdscr.addstr(gy, 0, gline[:max_x - 1], attr)
+                    _put(gy, 0, gline, attr)
                     gy += 1
                 stdscr.refresh()
                 stdscr.getch()
                 show_help = False
+                stdscr.clear()
                 continue
 
             # Draw bar tabs
@@ -588,11 +626,11 @@ def run_tui() -> None:
                 lbl = f" {bt} [{s_pos}:{cnt}] "
                 attr = curses.color_pair(2) | curses.A_BOLD if i == bar_idx else curses.A_DIM
                 if tab_x + len(lbl) < max_x:
-                    stdscr.addstr(2, tab_x, lbl, attr)
+                    _put(2, tab_x, lbl, attr)
                     tab_x += len(lbl) + 1
 
             info = f"Current Bar: {bar_title} ({slot_key})  |  Edge: {pos.upper()}  |  Background: {bg}"
-            stdscr.addstr(4, 0, info[:max_x - 1], curses.A_BOLD)
+            _put(4, 0, info, curses.A_BOLD)
 
             list_start_y = 6
             footer_lines = 4
@@ -619,15 +657,15 @@ def run_tui() -> None:
                     pad_len = max(0, min(68, max_x - 2) - len(text))
                     line = text + ("─" * pad_len)
                     attr = curses.color_pair(1) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD
-                    stdscr.addstr(y, 0, line[:max_x - 1], attr)
+                    _put(y, 0, line, attr)
                 elif kind == "empty":
-                    stdscr.addstr(y, 0, text[:max_x - 1], curses.A_DIM)
+                    _put(y, 0, text, curses.A_DIM)
                 elif kind == "item":
                     selected = (sel_i == row_idx)
                     prefix = "  ▸ " if selected else "    "
                     line = prefix + text.lstrip(" •")
                     attr = (curses.color_pair(2) | curses.A_BOLD) if selected else 0
-                    stdscr.addstr(y, 0, line[:max_x - 1], attr)
+                    _put(y, 0, line, attr)
                 y += 1
 
             # Permanent instructions + latest action status (or confirmation prompt) at the bottom
@@ -640,29 +678,29 @@ def run_tui() -> None:
                     _pr_slot, pr_pos, pr_eid = pending_remove
                     pr_short = pr_eid.split(".")[-1]
                     prompt_str = f" CONFIRM REMOVE: Delete '{pr_short}' ({pr_eid}) from {pr_pos} bar? Press [y] to confirm or [n/Esc] to cancel "
-                    stdscr.addstr(
+                    _put(
                         max_y - 3,
                         0,
-                        prompt_str[:max_x - 1],
+                        prompt_str,
                         curses.color_pair(5) | curses.A_BOLD if curses.has_colors() else curses.A_REVERSE | curses.A_BOLD,
                     )
                 else:
-                    stdscr.addstr(
+                    _put(
                         max_y - 3,
                         0,
-                        f"Status   : {status_msg}"[:max_x - 1],
+                        f"Status   : {status_msg}",
                         curses.color_pair(3) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD,
                     )
-                stdscr.addstr(
+                _put(
                     max_y - 2,
                     0,
-                    help_line_1[:max_x - 1],
+                    help_line_1,
                     curses.color_pair(4) if curses.has_colors() else curses.A_DIM,
                 )
-                stdscr.addstr(
+                _put(
                     max_y - 1,
                     0,
-                    help_line_2[:max_x - 1],
+                    help_line_2,
                     curses.color_pair(4) if curses.has_colors() else curses.A_DIM,
                 )
 
@@ -677,11 +715,10 @@ def run_tui() -> None:
                 if ch in (ord("y"), ord("Y")):
                     pop_from_layout(cfg[pr_slot]["layout"], pr_eid)
                     save_config(cfg)
-                    if pr_slot == "bar":
-                        subprocess.run(["omarchy-shell", "-q", "shell", "reloadConfig"], check=False)
-                    call_ipc("reloadConfig")
+                    _tui_reload(pr_slot == "bar")
                     status_msg = f"Removed '{pr_short}' ({pr_eid}) from {pr_pos} bar ({pr_slot})."
                 else:
+                    stdscr.clear()
                     status_msg = f"Cancelled removal of '{pr_short}'."
                 continue
 
@@ -689,14 +726,17 @@ def run_tui() -> None:
                 break
             elif ch in (ord("?"), ord("h"), ord("H")):
                 show_help = True
+                stdscr.clear()
             elif ch in (ord("\t"), curses.KEY_RIGHT):
                 bar_idx = (bar_idx + 1) % len(BAR_SLOTS)
                 row_idx = 0
                 scroll_offset = 0
+                stdscr.clear()
             elif ch == curses.KEY_LEFT:
                 bar_idx = (bar_idx - 1) % len(BAR_SLOTS)
                 row_idx = 0
                 scroll_offset = 0
+                stdscr.clear()
             elif ch in (curses.KEY_UP, ord("k")):
                 if flat_rows:
                     row_idx = (row_idx - 1) % len(flat_rows)
@@ -704,7 +744,13 @@ def run_tui() -> None:
                 if flat_rows:
                     row_idx = (row_idx + 1) % len(flat_rows)
             elif ch in (ord("m"), ord("M")):
-                subprocess.run(["omarchy-shell", "-q", "shell", "toggle", PLUGIN_ID, "{}"], check=False)
+                subprocess.run(
+                    ["omarchy-shell", "-q", "shell", "toggle", PLUGIN_ID, "{}"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
                 break
             elif ch in (ord("g"), ord("G")):
                 order = ["none", "glassy", "opaque"]
@@ -712,9 +758,7 @@ def run_tui() -> None:
                 nxt = order[(order.index(cur) + 1) % len(order)] if cur in order else "none"
                 bbar["background"] = nxt
                 save_config(cfg)
-                if slot_key == "bar":
-                    subprocess.run(["omarchy-shell", "-q", "shell", "reloadConfig"], check=False)
-                call_ipc("reloadConfig")
+                _tui_reload(slot_key == "bar")
                 status_msg = f"Set {slot_key} background to '{nxt}'."
             elif flat_rows and ch in (ord("x"), ord("X"), ord("d"), ord("D"), curses.KEY_DC, curses.KEY_BACKSPACE, 127):
                 _sk, _sl, _idx, eid, _dli = flat_rows[row_idx]
@@ -727,9 +771,7 @@ def run_tui() -> None:
                 if 0 <= new_idx < len(items):
                     items[idx], items[new_idx] = items[new_idx], items[idx]
                     save_config(cfg)
-                    if slot_key == "bar":
-                        subprocess.run(["omarchy-shell", "-q", "shell", "reloadConfig"], check=False)
-                    call_ipc("reloadConfig")
+                    _tui_reload(slot_key == "bar")
                     follow_eid = eid
                     status_msg = f"Reordered '{eid.split('.')[-1]}' in {sec_label}."
             elif flat_rows and ch in (ord("1"), ord("2"), ord("3"), ord("4")):
@@ -738,9 +780,7 @@ def run_tui() -> None:
                 popped = pop_from_layout(bbar["layout"], eid) or {"id": eid}
                 bbar["layout"].setdefault(target_sec, []).append(popped)
                 save_config(cfg)
-                if slot_key == "bar":
-                    subprocess.run(["omarchy-shell", "-q", "shell", "reloadConfig"], check=False)
-                call_ipc("reloadConfig")
+                _tui_reload(slot_key == "bar")
                 follow_eid = eid
                 status_msg = f"Moved '{eid.split('.')[-1]}' to {sec_label_map[target_sec]} on {pos.upper()} bar."
             elif flat_rows and ch in (ord("t"), ord("b"), ord("l"), ord("r")):
@@ -751,9 +791,7 @@ def run_tui() -> None:
                 popped = pop_from_layout(bbar["layout"], eid) or {"id": eid}
                 cfg[dest_slot]["layout"].setdefault(sec_key, []).append(popped)
                 save_config(cfg)
-                if slot_key == "bar" or dest_slot == "bar":
-                    subprocess.run(["omarchy-shell", "-q", "shell", "reloadConfig"], check=False)
-                call_ipc("reloadConfig")
+                _tui_reload(slot_key == "bar" or dest_slot == "bar")
                 status_msg = f"Sent '{eid.split('.')[-1]}' → {target_edge.upper()} bar ({dest_slot})."
 
     curses.wrapper(_tui_main)
