@@ -415,7 +415,9 @@ def run_tui() -> None:
 
         bar_idx = 0
         row_idx = 0
-        status_msg = "Keys: Tab/←/→ switch bar | ↑/↓ select widget | 1/2/3 section (L/M/R or T/M/B) | t/b/l/r send to edge | g bg | m GUI | q quit"
+        scroll_offset = 0
+        follow_eid = None
+        status_msg = "Ready — select a widget with ↑/↓ and press a hotkey below."
 
         while True:
             cfg = load_config()
@@ -428,6 +430,7 @@ def run_tui() -> None:
             sec_names = [("left", "T (top)" if is_vert else "L (left)"),
                          ("center", "M (middle)"),
                          ("right", "B (bottom)" if is_vert else "R (right)")]
+            sec_label_map = dict(sec_names)
 
             flat_rows = []
             for sec_key, sec_label in sec_names:
@@ -436,6 +439,13 @@ def run_tui() -> None:
                     eid = entry_id(item)
                     if eid:
                         flat_rows.append((sec_key, sec_label, idx, eid))
+
+            if follow_eid:
+                for i, (_sk, _sl, _idx, eid) in enumerate(flat_rows):
+                    if eid == follow_eid:
+                        row_idx = i
+                        break
+                follow_eid = None
 
             if flat_rows:
                 row_idx = max(0, min(row_idx, len(flat_rows) - 1))
@@ -462,12 +472,24 @@ def run_tui() -> None:
             info = f"Current Bar: {bar_title} ({slot_key}) | Edge: {pos.upper()} | Background: {bg}"
             stdscr.addstr(4, 0, info[:max_x - 1], curses.A_BOLD)
 
-            y = 6
+            list_start_y = 6
+            footer_lines = 4
+            avail_rows = max(1, max_y - list_start_y - footer_lines)
+
+            if row_idx < scroll_offset:
+                scroll_offset = row_idx
+            elif row_idx >= scroll_offset + avail_rows:
+                scroll_offset = row_idx - avail_rows + 1
+            scroll_offset = max(0, scroll_offset)
+
+            y = list_start_y
             if not flat_rows:
                 stdscr.addstr(y, 2, "(No widgets on this bar — dormant if secondary)", curses.A_DIM)
             else:
-                for r_i, (sec_key, sec_label, idx, eid) in enumerate(flat_rows):
-                    if y >= max_y - 3:
+                visible_slice = flat_rows[scroll_offset:scroll_offset + avail_rows]
+                for offset_i, (sec_key, sec_label, idx, eid) in enumerate(visible_slice):
+                    r_i = scroll_offset + offset_i
+                    if y >= max_y - footer_lines:
                         break
                     short = eid.split(".")[-1]
                     line = f"  [{sec_label:10}]  {short:22} ({eid})"
@@ -475,8 +497,18 @@ def run_tui() -> None:
                     stdscr.addstr(y, 0, line[:max_x - 1], attr)
                     y += 1
 
-            if max_y > 2:
-                stdscr.addstr(max_y - 2, 0, status_msg[:max_x - 1], curses.color_pair(4) if curses.has_colors() else curses.A_BOLD)
+            # Permanent instructions + latest action status at the bottom
+            sec_hint = "1:T(top) 2:M(middle) 3:B(bottom)" if is_vert else "1:L(left) 2:M(middle) 3:R(right)"
+            help_line_1 = f"Navigate : Tab/←/→ switch bar | ↑/↓ (j/k) select widget | [/] reorder in section"
+            help_line_2 = f"Actions  : {sec_hint} | t/b/l/r send to Top/Bottom/Left/Right bar | g bg | m GUI | q quit"
+
+            if max_y >= 10:
+                stdscr.addstr(max_y - 3, 0, f"Status   : {status_msg}"[:max_x - 1],
+                              curses.color_pair(3) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD)
+                stdscr.addstr(max_y - 2, 0, help_line_1[:max_x - 1],
+                              curses.color_pair(4) if curses.has_colors() else curses.A_DIM)
+                stdscr.addstr(max_y - 1, 0, help_line_2[:max_x - 1],
+                              curses.color_pair(4) if curses.has_colors() else curses.A_DIM)
 
             stdscr.refresh()
             ch = stdscr.getch()
@@ -486,9 +518,11 @@ def run_tui() -> None:
             elif ch in (ord("\t"), curses.KEY_RIGHT):
                 bar_idx = (bar_idx + 1) % len(BAR_SLOTS)
                 row_idx = 0
+                scroll_offset = 0
             elif ch == curses.KEY_LEFT:
                 bar_idx = (bar_idx - 1) % len(BAR_SLOTS)
                 row_idx = 0
+                scroll_offset = 0
             elif ch in (curses.KEY_UP, ord("k")):
                 if flat_rows:
                     row_idx = (row_idx - 1) % len(flat_rows)
@@ -508,6 +542,19 @@ def run_tui() -> None:
                     subprocess.run(["omarchy-shell", "-q", "shell", "reloadConfig"], check=False)
                 call_ipc("reloadConfig")
                 status_msg = f"Set {slot_key} background to '{nxt}'."
+            elif flat_rows and ch in (ord("["), ord("]")):
+                sec_key, sec_label, idx, eid = flat_rows[row_idx]
+                items = bbar["layout"].get(sec_key, [])
+                delta = -1 if ch == ord("[") else 1
+                new_idx = idx + delta
+                if 0 <= new_idx < len(items):
+                    items[idx], items[new_idx] = items[new_idx], items[idx]
+                    save_config(cfg)
+                    if slot_key == "bar":
+                        subprocess.run(["omarchy-shell", "-q", "shell", "reloadConfig"], check=False)
+                    call_ipc("reloadConfig")
+                    follow_eid = eid
+                    status_msg = f"Reordered '{eid.split('.')[-1]}' in {sec_label}."
             elif flat_rows and ch in (ord("1"), ord("2"), ord("3")):
                 target_sec = {"1": "left", "2": "center", "3": "right"}[chr(ch)]
                 _sk, _sl, _idx, eid = flat_rows[row_idx]
@@ -517,7 +564,8 @@ def run_tui() -> None:
                 if slot_key == "bar":
                     subprocess.run(["omarchy-shell", "-q", "shell", "reloadConfig"], check=False)
                 call_ipc("reloadConfig")
-                status_msg = f"Moved '{eid.split('.')[-1]}' to section {target_sec} on {pos} bar."
+                follow_eid = eid
+                status_msg = f"Moved '{eid.split('.')[-1]}' to {sec_label_map[target_sec]} on {pos.upper()} bar."
             elif flat_rows and ch in (ord("t"), ord("b"), ord("l"), ord("r")):
                 edge_map = {ord("t"): "top", ord("b"): "bottom", ord("l"): "left", ord("r"): "right"}
                 target_edge = edge_map[ch]
