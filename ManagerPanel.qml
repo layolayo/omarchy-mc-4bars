@@ -130,6 +130,23 @@ PanelWindow {
     return found
   }
 
+  function layoutHasTray(layout) {
+    if (!layout) return false
+    var secs = ["left", "center", "right"]
+    for (var s = 0; s < secs.length; s++) {
+      var arr = Array.isArray(layout[secs[s]]) ? layout[secs[s]] : []
+      for (var i = 0; i < arr.length; i++) {
+        if (BarModel.entryId(arr[i]) === "omarchy.tray") return true
+      }
+    }
+    return false
+  }
+
+  function barHasTray(barKey) {
+    var barObj = root.shellConfig && root.shellConfig[barKey] ? root.shellConfig[barKey] : null
+    return layoutHasTray(barObj ? barObj.layout : null)
+  }
+
   function moveWidget(pluginId, destBarKey, destSection) {
     if (!BarModel.isSafePluginId(pluginId)) return
     mutateShellConfig(function(cfg) {
@@ -141,8 +158,12 @@ PanelWindow {
       }
       if (entry === null) entry = { id: pluginId }
       var targetLayout = cfg[destBarKey].layout
-      if (!Array.isArray(targetLayout[destSection])) targetLayout[destSection] = []
-      targetLayout[destSection].push(entry)
+      var finalSec = destSection
+      if (finalSec === "tray" && (!layoutHasTray(targetLayout) || pluginId === "omarchy.tray")) {
+        finalSec = destBarKey === "bar" ? "right" : "center"
+      }
+      if (!Array.isArray(targetLayout[finalSec])) targetLayout[finalSec] = []
+      targetLayout[finalSec].push(entry)
     }, true)
   }
 
@@ -488,13 +509,14 @@ PanelWindow {
           }
         }
 
-        // Four columns: L/M/R + Tray for horizontal bars (top/bottom) or T/M/B + Tray for vertical bars (left/right)
+        // Columns: L/M/R (+ Tray if omarchy.tray is on this bar) or T/M/B (+ Tray) on vertical bars
         RowLayout {
           id: columnsRow
           readonly property bool isVerticalBar: {
             var e = root.barEdge(root.activeBarTab)
             return e === "left" || e === "right"
           }
+          readonly property bool hasTray: root.barHasTray(root.activeBarTab)
           Layout.fillWidth: true
           Layout.fillHeight: true
           spacing: 10
@@ -512,6 +534,7 @@ PanelWindow {
               readonly property string secKey: modelData.key
               readonly property string colTitle: columnsRow.isVerticalBar ? modelData.titleV : modelData.titleH
               readonly property var items: root.sectionEntries(root.activeBarTab, secKey)
+              visible: secKey !== "tray" || columnsRow.hasTray || items.length > 0
               Layout.fillWidth: true
               Layout.fillHeight: true
               radius: 6
@@ -662,6 +685,7 @@ PanelWindow {
                           delegate: Rectangle {
                             required property var modelData
                             readonly property bool activeSec: modelData.s === secCol.secKey
+                            visible: modelData.s !== "tray" || (columnsRow.hasTray && wid !== "omarchy.tray")
                             width: 22
                             height: 17
                             radius: 3

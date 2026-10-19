@@ -435,6 +435,17 @@ def count_widgets(layout: dict) -> int:
     return total
 
 
+def layout_has_tray(layout: dict) -> bool:
+    """Return True if 'omarchy.tray' is placed in left, center, or right of this bar."""
+    if not isinstance(layout, dict):
+        return False
+    for sec in ("left", "center", "right"):
+        for item in layout.get(sec, []):
+            if entry_id(item) == "omarchy.tray":
+                return True
+    return False
+
+
 def short_label(pid: str) -> str:
     parts = pid.split(".")
     if len(parts) > 1:
@@ -519,13 +530,17 @@ def run_tui() -> None:
             pos = bbar.get("position", def_pos)
             bg = bbar.get("background", "none")
             is_vert = pos in ("left", "right")
+            has_tray = layout_has_tray(bbar["layout"])
+            tray_items = [x for x in bbar["layout"].get("tray", []) if entry_id(x)]
             sec_names = [
                 ("left", "T (top)" if is_vert else "L (left)", "1 / T" if is_vert else "1 / L"),
                 ("center", "M (middle)", "2 / M"),
                 ("right", "B (bottom)" if is_vert else "R (right)", "3 / B" if is_vert else "3 / R"),
-                ("tray", "Tray (drawer)", "4"),
             ]
+            if has_tray or tray_items:
+                sec_names.append(("tray", "Tray (drawer)", "4"))
             sec_label_map = {k: lbl for k, lbl, _hk in sec_names}
+            sec_label_map.setdefault("tray", "Tray (drawer)")
 
             # Build both grouped visual lines (display_lines) and selectable widget entries (flat_rows)
             # display_lines item: (kind, text, selectable_index_or_None)
@@ -669,7 +684,9 @@ def run_tui() -> None:
                 y += 1
 
             # Permanent instructions + latest action status (or confirmation prompt) at the bottom
-            sec_hint = "1/T:Top 2/M:Mid 3/B:Bot 4:Tray" if is_vert else "1/L:Left 2/M:Mid 3/R:Right 4:Tray"
+            tray_suffix = " 4:Tray" if has_tray else ""
+            sec_hint = (f"1/T:Top 2/M:Mid 3/B:Bot{tray_suffix}"
+                        if is_vert else f"1/L:Left 2/M:Mid 3/R:Right{tray_suffix}")
             help_line_1 = "Navigate : Tab/←/→ switch bar | ↑/↓ (j/k) select widget | [/] reorder | ?:Guide | q:Quit"
             help_line_2 = f"Actions  : {sec_hint} | t/b/l/r:→Top/Bot/Left/Right Bar | x:Remove | g:BG | o:GUI"
 
@@ -793,12 +810,17 @@ def run_tui() -> None:
                 }
                 target_sec = sec_key_map[ch]
                 _sk, _sl, _idx, eid, _dli = flat_rows[row_idx]
-                popped = pop_from_layout(bbar["layout"], eid) or {"id": eid}
-                bbar["layout"].setdefault(target_sec, []).append(popped)
-                save_config(cfg)
-                _tui_reload(slot_key == "bar")
-                follow_eid = eid
-                status_msg = f"Moved '{eid.split('.')[-1]}' to {sec_label_map[target_sec]} on {pos.upper()} bar."
+                if target_sec == "tray" and not has_tray:
+                    status_msg = "No Tray on this bar — move 'omarchy.tray' to this bar first."
+                elif target_sec == "tray" and eid == "omarchy.tray":
+                    status_msg = "'omarchy.tray' hosts the tray drawer and cannot be placed inside itself."
+                else:
+                    popped = pop_from_layout(bbar["layout"], eid) or {"id": eid}
+                    bbar["layout"].setdefault(target_sec, []).append(popped)
+                    save_config(cfg)
+                    _tui_reload(slot_key == "bar")
+                    follow_eid = eid
+                    status_msg = f"Moved '{eid.split('.')[-1]}' to {sec_label_map[target_sec]} on {pos.upper()} bar."
             elif flat_rows and ch in (ord("t"), ord("b"), ord("l"), ord("r"), ord("T"), ord("B"), ord("L"), ord("R")):
                 edge_map = {
                     ord("t"): "top",
@@ -813,8 +835,11 @@ def run_tui() -> None:
                 target_edge = edge_map[ch]
                 dest_slot = resolve_bar_slot(cfg, target_edge)
                 sec_key, _sl, _idx, eid, _dli = flat_rows[row_idx]
+                dest_sec = sec_key
+                if dest_sec == "tray" and not layout_has_tray(cfg[dest_slot]["layout"]):
+                    dest_sec = "right" if dest_slot == "bar" else "center"
                 popped = pop_from_layout(bbar["layout"], eid) or {"id": eid}
-                cfg[dest_slot]["layout"].setdefault(sec_key, []).append(popped)
+                cfg[dest_slot]["layout"].setdefault(dest_sec, []).append(popped)
                 save_config(cfg)
                 _tui_reload(slot_key == "bar" or dest_slot == "bar")
                 status_msg = f"Sent '{eid.split('.')[-1]}' → {target_edge.upper()} bar ({dest_slot})."
@@ -862,10 +887,16 @@ def cmd_move(plugin_id_raw: str, section_raw: str, extra_args: list, target_bar_
     plugin_ids = [resolve_plugin_id(cfg, p) for p in raw_items]
 
     dest_slot = resolve_bar_slot(cfg, target_bar_or_edge)
+    dest_bar = cfg[dest_slot]
+    if sec == "tray" and not layout_has_tray(dest_bar["layout"]):
+        edge = dest_bar.get("position", "bottom")
+        sys.exit(
+            f"Error: The {edge} bar ({dest_slot}) does not contain 'omarchy.tray'. "
+            "Move 'omarchy.tray' to that bar before placing widgets in its tray."
+        )
     rescan_needed = ensure_plugin_enabled(cfg, PLUGIN_ID)
 
     touched_primary = dest_slot == "bar"
-    dest_bar = cfg[dest_slot]
     dest_bar["layout"].setdefault(sec, [])
 
     for plugin_id in plugin_ids:
