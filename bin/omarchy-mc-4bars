@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""Manage the Omarchy Quad-Edge Status Bar System (`io.github.layolayo.mc-4bars`).
+
+Supports up to 4 independent status bars across `top`, `bottom`, `left`, and `right`
+screen edges, with lazy instantiation (empty bars consume 0 surfaces), warm off-screen
+parking for instant toggling, and automatic edge swapping when a bar is moved onto
+an occupied screen edge.
+
+Examples:
+  omarchy mc-4bars list
+  omarchy mc-4bars manager
+  omarchy mc-4bars toggle [top|bottom|left|right|all]
+  omarchy mc-4bars show   [top|bottom|left|right|all]
+  omarchy mc-4bars hide   [top|bottom|left|right|all]
+  omarchy mc-4bars swap   <top|bottom|left|right> <top|bottom|left|right>
+  omarchy mc-4bars move   <plugin-id> [top|bottom|left|right] <L|M|R> [--before <id>|--after <id>|--index <n>]
+  omarchy mc-4bars top    <plugin-id> [L|M|R]
+  omarchy mc-4bars bottom <plugin-id> [L|M|R]
+  omarchy mc-4bars left   <plugin-id> [L|M|R]
+  omarchy mc-4bars right  <plugin-id> [L|M|R]
+  omarchy mc-4bars <plugin-id> <L|M|R>
+  omarchy mc-4bars position <bottom|top|left|right> [source-edge-or-slot]
+  omarchy mc-4bars background <none|glassy|opaque|cycle> [edge-or-slot]
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+PLUGIN_ID = "io.github.layolayo.mc-4bars"
+LEGACY_PLUGIN_IDS = ("io.github.layolayo.mc-2bars", "matthew.bottom-bar")
+SHELL_JSON = Path.home() / ".config" / "omarchy" / "shell.json"
+SECTIONS = ("left", "center", "right", "tray")
+EDGES = ("top", "bottom", "left", "right")
+BAR_SLOTS = (
+    ("bar", "top", "Primary Bar"),
+    ("bottomBar", "bottom", "Secondary Bar 1"),
+    ("leftBar", "left", "Secondary Bar 2"),
+    ("rightBar", "right", "Secondary Bar 3"),
+)
+SAFE_PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+SECTION_ALIASES = {
+    "l": "left",
+    "left": "left",
+    "m": "center",
+    "mid": "center",
+    "middle": "center",
+    "c": "center",
+    "center": "center",
+    "centre": "center",
+    "r": "right",
+    "right": "right",
+    "t": "tray",
+    "tray": "tray",
+}
+
+SLOT_ALIASES = {
+    "bar": "bar",
+    "primary": "bar",
+    "bottombar": "bottomBar",
+    "bottom-bar": "bottomBar",
+    "leftbar": "leftBar",
+    "left-bar": "leftBar",
+    "rightbar": "rightBar",
+    "right-bar": "rightBar",
+}
+
+
+def validate_plugin_id(raw: str) -> str:
+    val = (raw or "").strip()
+    if not val or ".." in val or not SAFE_PLUGIN_ID_RE.match(val):
+        sys.exit(f"Invalid plugin ID: '{raw}'.")
+    return val
+
+
+def resolve_section(raw: str) -> str:
+    key = (raw or "").strip().lower()
+    if key not in SECTION_ALIASES:
+        sys.exit(
+            f"Unknown section '{raw}'. Use L (left), M (middle/centre), R (right), or tray."
+        )
+    return SECTION_ALIASES[key]
+
+
+def entry_id(item) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict) and isinstance(item.get("id"), str):
+        return item["id"].strip()
+    return ""
+
+
+def load_config() -> dict:
+    if not SHELL_JSON.exists():
+        sys.exit(f"Missing configuration file: {SHELL_JSON}")
+    with SHELL_JSON.open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        sys.exit(f"Malformed configuration root in {SHELL_JSON}")
+    return data
+
+
+def save_config(cfg: dict) -> None:
+    parent = SHELL_JSON.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    mode = 0o600
+    if SHELL_JSON.exists():
+        mode = SHELL_JSON.stat().st_mode & 0o777
+    fd, tmp_path = tempfile.mkstemp(prefix=".shell.", suffix=".json.tmp", dir=str(parent))
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(cfg, fh, indent=2)
+            fh.write("\n")
+        os.replace(tmp_path, str(SHELL_JSON))
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
+def ensure_all_bars(cfg: dict) -> None:
+    for slot_key, default_pos, _label in BAR_SLOTS:
+        bar = cfg.setdefault(slot_key, {})
+        pos = str(bar.get("position", default_pos)).strip().lower()
+        bar["position"] = pos if pos in EDGES else default_pos
+        bar.setdefault("background", "none")
+        layout = bar.setdefault("layout", {})
+        for sec in ("left", "center", "right"):
+            if not isinstance(layout.get(sec), list):
+                layout[sec] = []
+
+
+def resolve_bar_slot(cfg: dict, target_raw: str) -> str:
+    """Resolve an edge name ('top', 'bottom', 'left', 'right') or slot key to the matching slot key."""
+    ensure_all_bars(cfg)
+    key = (target_raw or "").strip().lower()
+    if key in SLOT_ALIASES:
+        return SLOT_ALIASES[key]
+    if key in EDGES:
+        for slot_key, default_pos, _label in BAR_SLOTS:
+            pos = str(cfg.get(slot_key, {}).get("position", default_pos)).strip().lower()
+            if pos == key:
+                return slot_key
+        # Fallback to default mapping if no slot currently claims that edge
+        for slot_key, default_pos, _label in BAR_SLOTS:
+            if default_pos == key:
+                return slot_key
+    sys.exit(
+        f"Unknown bar or edge '{target_raw}'. Use top, bottom, left, right, bar, bottomBar, leftBar, or rightBar."
+    )
+
+
+def ensure_plugin_enabled(cfg: dict, plugin_id: str) -> bool:
+    plugins = cfg.setdefault("plugins", [])
+    cleaned = [p for p in plugins if entry_id(p) not in LEGACY_PLUGIN_IDS]
+    changed = len(cleaned) != len(plugins)
+    plugins[:] = cleaned
+    for entry in plugins:
+        if entry_id(entry) == plugin_id:
+            if isinstance(entry, dict) and entry.get("enabled") is False:
+                entry["enabled"] = True
+                return True
+            return changed
+    plugins.append({"id": plugin_id})
+    return True
+
+
+def pop_from_layout(layout: dict, target_id: str):
+    """Remove all occurrences of target_id across sections and return the first full entry."""
+    found_entry = None
+    for sec in SECTIONS:
+        items = layout.get(sec)
+        if not isinstance(items, list):
+            continue
+        kept = []
+        for item in items:
+            if entry_id(item) == target_id:
+                if found_entry is None:
+                    found_entry = item
+            else:
+                kept.append(item)
+        layout[sec] = kept
+    return found_entry
+
+
+def insert_into_section(items: list, entry, before: str = None, after: str = None, index: int = None) -> None:
+    if index is not None:
+        idx = max(0, min(index, len(items)))
+        items.insert(idx, entry)
+        return
+    if before:
+        for i, existing in enumerate(items):
+            if entry_id(existing) == before:
+                items.insert(i, entry)
+                return
+    if after:
+        for i, existing in enumerate(items):
+            if entry_id(existing) == after:
+                items.insert(i + 1, entry)
+                return
+    items.append(entry)
+
+
+def call_ipc(*args: str) -> int:
+    cmd = ["omarchy-shell", PLUGIN_ID, *args]
+    res = subprocess.run(cmd, check=False)
+    return res.returncode
+
+
+def count_widgets(layout: dict) -> int:
+    total = 0
+    for sec in SECTIONS:
+        items = layout.get(sec, [])
+        if isinstance(items, list):
+            total += sum(1 for x in items if entry_id(x))
+    return total
+
+
+def print_layout(cfg: dict) -> None:
+    ensure_all_bars(cfg)
+    for slot_key, default_pos, title in BAR_SLOTS:
+        bbar = cfg.get(slot_key, {})
+        pos = bbar.get("position", default_pos)
+        bg = bbar.get("background", "none")
+        layout = bbar.get("layout", {})
+        total = count_widgets(layout)
+        state = "active" if (total > 0 or slot_key == "bar") else "dormant (0 surfaces)"
+        print(f"{title} [{slot_key}] — edge: {pos}, background: {bg}, status: {state}")
+        labels = [("L (left)", "left"), ("M (center)", "center"), ("R (right)", "right"), ("Tray", "tray")]
+        for label, sec in labels:
+            items = layout.get(sec, [])
+            if not items and sec == "tray":
+                continue
+            ids = [entry_id(x) for x in items if entry_id(x)]
+            joined = ", ".join(ids) if ids else "(empty)"
+            print(f"  {label:10}: {joined}")
+        print()
+
+
+def parse_move_flags(args: list):
+    before = None
+    after = None
+    index = None
+    i = 0
+    while i < len(args):
+        flag = args[i]
+        if flag == "--before" and i + 1 < len(args):
+            before = validate_plugin_id(args[i + 1])
+            i += 2
+        elif flag == "--after" and i + 1 < len(args):
+            after = validate_plugin_id(args[i + 1])
+            i += 2
+        elif flag == "--index" and i + 1 < len(args):
+            try:
+                index = int(args[i + 1])
+            except ValueError:
+                sys.exit(f"Invalid integer for --index: '{args[i + 1]}'")
+            i += 2
+        else:
+            sys.exit(f"Unrecognised option: {flag}")
+    return before, after, index
+
+
+def cmd_move(plugin_id_raw: str, section_raw: str, extra_args: list, target_bar_or_edge: str = "bottomBar") -> None:
+    plugin_id = validate_plugin_id(plugin_id_raw)
+    sec = resolve_section(section_raw)
+    before, after, index = parse_move_flags(extra_args)
+
+    cfg = load_config()
+    ensure_all_bars(cfg)
+    dest_slot = resolve_bar_slot(cfg, target_bar_or_edge)
+    rescan_needed = ensure_plugin_enabled(cfg, PLUGIN_ID)
+
+    # Extract existing entry (preserving inline settings) from any of the 4 bars
+    existing_entry = None
+    touched_primary = dest_slot == "bar"
+    for slot_key, _def_pos, _label in BAR_SLOTS:
+        popped = pop_from_layout(cfg[slot_key]["layout"], plugin_id)
+        if popped is not None:
+            if slot_key == "bar":
+                touched_primary = True
+            if existing_entry is None:
+                existing_entry = popped
+
+    entry = existing_entry if existing_entry is not None else {"id": plugin_id}
+    dest_bar = cfg[dest_slot]
+    dest_bar["layout"].setdefault(sec, [])
+    insert_into_section(dest_bar["layout"][sec], entry, before=before, after=after, index=index)
+
+    save_config(cfg)
+    if rescan_needed or touched_primary:
+        subprocess.run(["omarchy-shell", "shell", "rescanPlugins"], check=False)
+    call_ipc("reloadConfig")
+
+    edge = dest_bar.get("position", "bottom")
+    print(f"Positioned '{plugin_id}' on {edge} bar ({dest_slot}) in section '{sec}'.")
+
+
+def move_or_swap_edge(cfg: dict, source_slot: str, target_edge: str) -> tuple[str, str]:
+    """Move source_slot to target_edge; if another bar occupies target_edge, swap them."""
+    ensure_all_bars(cfg)
+    source_edge = cfg[source_slot].get("position", "bottom")
+    if source_edge == target_edge:
+        return source_edge, ""
+
+    occupant_slot = ""
+    for slot_key, _def_pos, _label in BAR_SLOTS:
+        if slot_key == source_slot:
+            continue
+        if cfg[slot_key].get("position") == target_edge:
+            occupant_slot = slot_key
+            break
+
+    cfg[source_slot]["position"] = target_edge
+    if occupant_slot:
+        cfg[occupant_slot]["position"] = source_edge
+
+    return source_edge, occupant_slot
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if not args or args[0] in ("list", "ls", "status"):
+        print_layout(load_config())
+        return
+
+    sub = args[0]
+    if sub in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return
+
+    if sub in ("manager", "gui", "panel", "settings"):
+        res = subprocess.run(["omarchy-shell", "shell", "toggle", PLUGIN_ID, "{}"], check=False)
+        sys.exit(res.returncode)
+
+    if sub in ("toggle", "show", "hide"):
+        if len(args) >= 2 and args[1].lower() in EDGES:
+            edge = args[1].lower()
+            ipc_fn = "toggleEdge" if sub == "toggle" else ("showEdge" if sub == "show" else "hideEdge")
+            sys.exit(call_ipc(ipc_fn, edge))
+        sys.exit(call_ipc(sub))
+
+    if sub == "swap":
+        if len(args) < 3:
+            sys.exit("Usage: omarchy mc-4bars swap <top|bottom|left|right> <top|bottom|left|right>")
+        cfg = load_config()
+        ensure_all_bars(cfg)
+        slot_a = resolve_bar_slot(cfg, args[1])
+        slot_b = resolve_bar_slot(cfg, args[2])
+        edge_a = cfg[slot_a]["position"]
+        edge_b = cfg[slot_b]["position"]
+        if edge_a == edge_b:
+            print(f"Both arguments resolve to the '{edge_a}' edge; nothing to swap.")
+            return
+        cfg[slot_a]["position"] = edge_b
+        cfg[slot_b]["position"] = edge_a
+        save_config(cfg)
+        if slot_a == "bar" or slot_b == "bar":
+            subprocess.run(["omarchy-shell", "shell", "rescanPlugins"], check=False)
+        call_ipc("reloadConfig")
+        print(f"Swapped {slot_a} ({edge_a} → {edge_b}) and {slot_b} ({edge_b} → {edge_a}).")
+        return
+
+    if sub == "open":
+        if len(args) < 2:
+            sys.exit("Usage: omarchy mc-4bars open <plugin-id>")
+        pid = validate_plugin_id(args[1])
+        sys.exit(call_ipc("togglePlugin", pid))
+
+    if sub in ("move", "put", "add", "set"):
+        if len(args) < 3:
+            sys.exit("Usage: omarchy mc-4bars move <plugin-id> [edge-or-bar] <L|M|R> [--before <id>|--after <id>|--index <n>]")
+        # Support both `move <id> <L|M|R>` and `move <id> <edge|bar> <L|M|R>`
+        if len(args) >= 4 and (args[2].lower() in EDGES or args[2].lower() in SLOT_ALIASES) and args[3].lower() in SECTION_ALIASES:
+            cmd_move(args[1], args[3], args[4:], target_bar_or_edge=args[2])
+        else:
+            cmd_move(args[1], args[2], args[3:], target_bar_or_edge="bottomBar")
+        return
+
+    if sub in ("top", "bottom", "left", "right", "unmove", "restore"):
+        target_edge = "top" if sub in ("top", "unmove", "restore") else sub
+        if len(args) < 2:
+            sys.exit(f"Usage: omarchy mc-4bars {sub} <plugin-id> [L|M|R] [--before <id>|--after <id>|--index <n>]")
+        default_sec = "right" if target_edge == "top" else "center"
+        sec_raw = args[2] if len(args) >= 3 and not args[2].startswith("--") else default_sec
+        extra = args[3:] if len(args) >= 3 and not args[2].startswith("--") else args[2:]
+        cmd_move(args[1], sec_raw, extra, target_bar_or_edge=target_edge)
+        return
+
+    if sub in ("remove", "rm"):
+        if len(args) < 2:
+            sys.exit("Usage: omarchy mc-4bars remove <plugin-id>")
+        pid = validate_plugin_id(args[1])
+        cfg = load_config()
+        ensure_all_bars(cfg)
+        removed_from = None
+        for slot_key, _def_pos, _label in BAR_SLOTS:
+            if slot_key == "bar":
+                continue
+            if pop_from_layout(cfg[slot_key]["layout"], pid) is not None:
+                removed_from = slot_key
+        if removed_from is None:
+            sys.exit(f"'{pid}' was not found on any secondary bar.")
+        save_config(cfg)
+        call_ipc("reloadConfig")
+        print(f"Removed '{pid}' from {removed_from}.")
+        return
+
+    if sub in ("position", "pos", "edge"):
+        if len(args) < 2 or args[1].lower() not in EDGES:
+            sys.exit("Usage: omarchy mc-4bars position <bottom|top|left|right> [source-edge-or-slot]")
+        target_edge = args[1].lower()
+        cfg = load_config()
+        ensure_all_bars(cfg)
+        source_slot = resolve_bar_slot(cfg, args[2]) if len(args) >= 3 else "bottomBar"
+        old_edge, swapped_slot = move_or_swap_edge(cfg, source_slot, target_edge)
+        save_config(cfg)
+        if source_slot == "bar" or swapped_slot == "bar":
+            subprocess.run(["omarchy-shell", "shell", "rescanPlugins"], check=False)
+        call_ipc("reloadConfig")
+        if swapped_slot:
+            print(
+                f"Moved '{source_slot}' to '{target_edge}' and swapped '{swapped_slot}' to '{old_edge}'."
+            )
+        else:
+            print(f"Set '{source_slot}' edge position to '{target_edge}'.")
+        return
+
+    if sub in ("background", "bg"):
+        if len(args) < 2 or args[1].lower() not in ("none", "glassy", "opaque", "cycle"):
+            sys.exit("Usage: omarchy mc-4bars background <none|glassy|opaque|cycle> [edge-or-slot]")
+        cfg = load_config()
+        ensure_all_bars(cfg)
+        target_slot = resolve_bar_slot(cfg, args[2]) if len(args) >= 3 else "bottomBar"
+        target_bar = cfg[target_slot]
+        choice = args[1].lower()
+        if choice == "cycle":
+            order = ["none", "glassy", "opaque"]
+            cur = target_bar.get("background", "none")
+            choice = order[(order.index(cur) + 1) % len(order)] if cur in order else "none"
+        target_bar["background"] = choice
+        save_config(cfg)
+        if target_slot == "bar":
+            subprocess.run(["omarchy-shell", "shell", "rescanPlugins"], check=False)
+        call_ipc("reloadConfig")
+        print(f"Set '{target_slot}' ({target_bar.get('position')}) background to '{choice}'.")
+        return
+
+    # Shorthand: `omarchy mc-4bars <plugin-id> <L|M|R> [...]`
+    if len(args) >= 2 and args[1].lower() in SECTION_ALIASES:
+        cmd_move(args[0], args[1], args[2:], target_bar_or_edge="bottomBar")
+        return
+
+    sys.exit(f"Unknown subcommand '{sub}'. Run 'omarchy mc-4bars --help' for usage.")
+
+
+if __name__ == "__main__":
+    main()
