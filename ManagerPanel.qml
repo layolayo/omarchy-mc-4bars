@@ -257,7 +257,8 @@ PanelWindow {
           }
 
           Rectangle {
-            width: 108
+            implicitWidth: toggleEdgeLabel.implicitWidth + 24
+            Layout.preferredWidth: implicitWidth
             height: 28
             radius: 5
             color: toggleEdgeMouse.containsMouse ? Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.25) : Qt.rgba(1, 1, 1, 0.08)
@@ -265,6 +266,7 @@ PanelWindow {
             border.color: Commons.Color.accent
 
             Text {
+              id: toggleEdgeLabel
               anchors.centerIn: parent
               text: "Toggle " + root.barEdge(root.activeBarTab)
               color: Commons.Color.foreground
@@ -282,7 +284,8 @@ PanelWindow {
           }
 
           Rectangle {
-            width: 96
+            implicitWidth: toggleAllLabel.implicitWidth + 24
+            Layout.preferredWidth: implicitWidth
             height: 28
             radius: 5
             color: toggleAllMouse.containsMouse ? Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.25) : Qt.rgba(1, 1, 1, 0.08)
@@ -290,6 +293,7 @@ PanelWindow {
             border.color: Commons.Color.accent
 
             Text {
+              id: toggleAllLabel
               anchors.centerIn: parent
               text: "Toggle All"
               color: Commons.Color.foreground
@@ -412,12 +416,14 @@ PanelWindow {
               delegate: Rectangle {
                 required property string modelData
                 readonly property bool current: root.barEdge(root.activeBarTab) === modelData
-                width: 60
+                implicitWidth: Math.max(58, edgeBtnLabel.implicitWidth + 18)
+                Layout.preferredWidth: implicitWidth
                 height: 26
                 radius: 4
                 color: current ? Commons.Color.accent : Qt.rgba(1, 1, 1, 0.08)
 
                 Text {
+                  id: edgeBtnLabel
                   anchors.centerIn: parent
                   text: modelData
                   color: current ? Commons.Color.background : Commons.Color.foreground
@@ -448,12 +454,14 @@ PanelWindow {
               delegate: Rectangle {
                 required property string modelData
                 readonly property bool current: root.barBackground(root.activeBarTab) === modelData
-                width: 58
+                implicitWidth: Math.max(58, bgBtnLabel.implicitWidth + 18)
+                Layout.preferredWidth: implicitWidth
                 height: 26
                 radius: 4
                 color: current ? Commons.Color.accent : Qt.rgba(1, 1, 1, 0.08)
 
                 Text {
+                  id: bgBtnLabel
                   anchors.centerIn: parent
                   text: modelData
                   color: current ? Commons.Color.background : Commons.Color.foreground
@@ -599,20 +607,30 @@ PanelWindow {
                         Item { Layout.fillWidth: true }
 
                         Rectangle {
-                          width: 20
+                          width: 22
                           height: 17
                           radius: 3
                           color: Qt.rgba(1, 1, 1, 0.12)
-                          Text { anchors.centerIn: parent; text: "↑"; color: Commons.Color.foreground; font.pixelSize: 10 }
+                          Text {
+                            anchors.centerIn: parent
+                            text: columnsRow.isVerticalBar ? "↑" : "←"
+                            color: Commons.Color.foreground
+                            font.pixelSize: 10
+                          }
                           MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.shiftWidget(root.activeBarTab, secCol.secKey, index, -1) }
                         }
 
                         Rectangle {
-                          width: 20
+                          width: 22
                           height: 17
                           radius: 3
                           color: Qt.rgba(1, 1, 1, 0.12)
-                          Text { anchors.centerIn: parent; text: "↓"; color: Commons.Color.foreground; font.pixelSize: 10 }
+                          Text {
+                            anchors.centerIn: parent
+                            text: columnsRow.isVerticalBar ? "↓" : "→"
+                            color: Commons.Color.foreground
+                            font.pixelSize: 10
+                          }
                           MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.shiftWidget(root.activeBarTab, secCol.secKey, index, 1) }
                         }
                       }
