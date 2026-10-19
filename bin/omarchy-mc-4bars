@@ -88,6 +88,46 @@ PLUGIN_SHORT_ALIASES = {
 }
 
 
+BUILTIN_OMARCHY_WIDGETS = {
+    "omarchy.active-window": "Active Window",
+    "omarchy.agents": "Agents",
+    "omarchy.audio": "Audio",
+    "omarchy.battery": "Battery",
+    "omarchy.bluetooth": "Bluetooth",
+    "omarchy.clipboard": "Clipboard",
+    "omarchy.clock": "Clock",
+    "omarchy.disk-speedtest": "Disk Speedtest",
+    "omarchy.dropbox": "Dropbox",
+    "omarchy.elsewhen": "Elsewhen",
+    "omarchy.emojis": "Emojis",
+    "omarchy.idle": "Idle",
+    "omarchy.image-picker": "Image Picker",
+    "omarchy.indicators": "Indicators",
+    "omarchy.keyboard-layout": "Keyboard Layout",
+    "omarchy.lock": "Lock",
+    "omarchy.media": "Media",
+    "omarchy.menu": "Menu",
+    "omarchy.microphone": "Microphone",
+    "omarchy.monitor": "Monitor",
+    "omarchy.network": "Network",
+    "omarchy.nightlight": "Nightlight",
+    "omarchy.notifications": "Notifications",
+    "omarchy.power": "Power",
+    "omarchy.reminders": "Reminders",
+    "omarchy.remote-session": "Remote Session",
+    "omarchy.screensaver": "Screensaver",
+    "omarchy.spacer": "Spacer",
+    "omarchy.speedtest": "Speedtest",
+    "omarchy.system-update": "System Update",
+    "omarchy.tailscale": "Tailscale",
+    "omarchy.theme-switcher": "Theme Switcher",
+    "omarchy.tray": "Tray",
+    "omarchy.weather": "Weather",
+    "omarchy.wifiqr": "Wi-Fi QR",
+    "omarchy.workspaces": "Workspaces",
+}
+
+
 def validate_plugin_id(raw: str) -> str:
     val = (raw or "").strip()
     if not val or ".." in val or not SAFE_PLUGIN_ID_RE.match(val):
@@ -97,7 +137,10 @@ def validate_plugin_id(raw: str) -> str:
 
 def discover_valid_bar_widgets() -> dict[str, dict]:
     """Return a dict mapping valid bar-widget plugin ID -> metadata dict."""
-    catalogue: dict[str, dict] = {}
+    catalogue: dict[str, dict] = {
+        pid: {"id": pid, "name": name, "description": "Built-in Omarchy bar module"}
+        for pid, name in BUILTIN_OMARCHY_WIDGETS.items()
+    }
 
     # 1. Scan manifest.json files in system and user plugin directories
     for root_dir in (SYSTEM_PLUGINS_DIR, USER_PLUGINS_DIR):
@@ -119,7 +162,18 @@ def discover_valid_bar_widgets() -> dict[str, dict]:
             except Exception:
                 continue
 
-    # 2. Query running omarchy-shell if available
+    # 2. Scan custom QML bar modules in ~/.config/omarchy/bar/modules
+    custom_modules_dir = Path.home() / ".config/omarchy/bar/modules"
+    if custom_modules_dir.exists():
+        for qml_file in custom_modules_dir.glob("*.qml"):
+            cid = qml_file.stem
+            catalogue[cid] = {
+                "id": cid,
+                "name": cid,
+                "description": "Custom QML bar module",
+            }
+
+    # 3. Query running omarchy-shell if available
     try:
         res = subprocess.run(
             ["omarchy-shell", "-q", "shell", "listPlugins"],
@@ -213,14 +267,12 @@ def resolve_plugin_id(cfg: dict, raw: str) -> str:
 
 
 def prune_invalid_entries(cfg: dict) -> list[tuple[str, str]]:
-    """Remove any entries from secondary bars that are not in the valid bar-widget catalogue."""
+    """Remove any entries from all 4 bars that are not in the valid bar-widget catalogue."""
     catalogue = discover_valid_bar_widgets()
     if not catalogue:
         return []
     removed: list[tuple[str, str]] = []
     for slot_key, _def_pos, _label in BAR_SLOTS:
-        if slot_key == "bar":
-            continue
         layout = cfg.get(slot_key, {}).get("layout", {})
         for sec in SECTIONS:
             items = layout.get(sec)
@@ -228,6 +280,10 @@ def prune_invalid_entries(cfg: dict) -> list[tuple[str, str]]:
                 continue
             kept = []
             for item in items:
+                # Preserve inline custom command/qml modules
+                if isinstance(item, dict) and (item.get("exec") or item.get("source") or item.get("type")):
+                    kept.append(item)
+                    continue
                 eid = entry_id(item)
                 if eid and eid not in catalogue:
                     removed.append((slot_key, eid))
@@ -412,12 +468,15 @@ def run_tui() -> None:
             curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_CYAN)
             curses.init_pair(3, curses.COLOR_GREEN, -1)
             curses.init_pair(4, curses.COLOR_YELLOW, -1)
+            curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_RED)
 
         bar_idx = 0
         row_idx = 0
         scroll_offset = 0
         follow_eid = None
-        status_msg = "Ready — select a widget with ↑/↓ and press a hotkey below."
+        show_help = False
+        pending_remove = None  # tuple: (slot_key, pos_label, eid)
+        status_msg = "Ready — use ↑/↓ to select a widget, ? for full guide, or q to quit."
 
         while True:
             cfg = load_config()
@@ -427,21 +486,36 @@ def run_tui() -> None:
             pos = bbar.get("position", def_pos)
             bg = bbar.get("background", "none")
             is_vert = pos in ("left", "right")
-            sec_names = [("left", "T (top)" if is_vert else "L (left)"),
-                         ("center", "M (middle)"),
-                         ("right", "B (bottom)" if is_vert else "R (right)")]
-            sec_label_map = dict(sec_names)
+            sec_names = [
+                ("left", "T (top)" if is_vert else "L (left)", "1"),
+                ("center", "M (middle)", "2"),
+                ("right", "B (bottom)" if is_vert else "R (right)", "3"),
+                ("tray", "Tray (drawer)", "4"),
+            ]
+            sec_label_map = {k: lbl for k, lbl, _hk in sec_names}
 
+            # Build both grouped visual lines (display_lines) and selectable widget entries (flat_rows)
+            # display_lines item: (kind, text, selectable_index_or_None)
+            display_lines = []
             flat_rows = []
-            for sec_key, sec_label in sec_names:
-                items = bbar["layout"].get(sec_key, [])
-                for idx, item in enumerate(items):
-                    eid = entry_id(item)
-                    if eid:
-                        flat_rows.append((sec_key, sec_label, idx, eid))
+            for sec_key, sec_label, hk in sec_names:
+                items = [x for x in bbar["layout"].get(sec_key, []) if entry_id(x)]
+                hdr_title = f"── [{hk}] {sec_label} ({len(items)}) "
+                display_lines.append(("header", hdr_title, None))
+                if not items:
+                    display_lines.append(("empty", "      (empty)", None))
+                else:
+                    for idx, item in enumerate(items):
+                        eid = entry_id(item)
+                        sel_i = len(flat_rows)
+                        display_line_idx = len(display_lines)
+                        flat_rows.append((sec_key, sec_label, idx, eid, display_line_idx))
+                        short = eid.split(".")[-1]
+                        display_lines.append(("item", f"    • {short:24}  ({eid})", sel_i))
+                display_lines.append(("spacer", "", None))
 
             if follow_eid:
-                for i, (_sk, _sl, _idx, eid) in enumerate(flat_rows):
+                for i, (_sk, _sl, _idx, eid, _dli) in enumerate(flat_rows):
                     if eid == follow_eid:
                         row_idx = i
                         break
@@ -455,8 +529,56 @@ def run_tui() -> None:
             stdscr.erase()
             max_y, max_x = stdscr.getmaxyx()
 
-            header = " MC 4Bars — Interactive Terminal Manager "
-            stdscr.addstr(0, 0, header[:max_x - 1], curses.A_BOLD | (curses.color_pair(1) if curses.has_colors() else 0))
+            # Top Title Bar with explicit [?] Guide and [q] Quit
+            header_left = " MC 4Bars — Interactive Terminal Manager "
+            header_right = " [?] Guide/Help   [q] Quit "
+            stdscr.addstr(0, 0, header_left[:max_x - 1], curses.A_BOLD | (curses.color_pair(1) if curses.has_colors() else 0))
+            if max_x > len(header_left) + len(header_right) + 2:
+                stdscr.addstr(0, max_x - len(header_right) - 1, header_right,
+                              curses.A_BOLD | (curses.color_pair(4) if curses.has_colors() else 0))
+
+            if show_help:
+                guide_lines = [
+                    "┌── MC 4Bars Interactive TUI — Instructions & Keybinding Guide ──────────────────┐",
+                    "│                                                                                │",
+                    "│  NAVIGATION                                                                    │",
+                    "│    ↑ / ↓  or  k / j       Move selection highlight up or down across widgets   │",
+                    "│    Tab    or  ← / →       Switch between the 4 Bars (Primary, Bottom, L, R)    │",
+                    "│                                                                                │",
+                    "│  MOVE SELECTED WIDGET WITHIN CURRENT BAR (SECTIONS)                            │",
+                    "│    1                      Move to L (left)   [or T (top) on vertical bars]     │",
+                    "│    2                      Move to M (middle)                                   │",
+                    "│    3                      Move to R (right)  [or B (bottom) on vertical bars]  │",
+                    "│    4                      Move to Tray (drawer)                                │",
+                    "│    [  or  ]               Reorder selected widget earlier/later in its section │",
+                    "│                                                                                │",
+                    "│  SEND SELECTED WIDGET TO ANOTHER SCREEN EDGE BAR                               │",
+                    "│    t                      Send widget to TOP bar                               │",
+                    "│    b                      Send widget to BOTTOM bar                            │",
+                    "│    l                      Send widget to LEFT bar                              │",
+                    "│    r                      Send widget to RIGHT bar                             │",
+                    "│                                                                                │",
+                    "│  REMOVE / BAR APPEARANCE / EXIT                                                │",
+                    "│    x  or  d  or  Delete   Remove selected widget (asks [y/n] confirmation)     │",
+                    "│    g                      Cycle current bar background (none → glassy → opaque)│",
+                    "│    m                      Open graphical point-and-click GUI Manager           │",
+                    "│    ?  or  h               Toggle this Instructions & Guide screen              │",
+                    "│    q  or  Esc             Quit the TUI                                         │",
+                    "└────────────────────────────────────────────────────────────────────────────────┘",
+                    "",
+                    "                   Press ANY KEY to return to the widget list...                  ",
+                ]
+                gy = 2
+                for gline in guide_lines:
+                    if gy >= max_y - 1:
+                        break
+                    attr = curses.color_pair(1) | curses.A_BOLD if "──" in gline or "Press ANY KEY" in gline else 0
+                    stdscr.addstr(gy, 0, gline[:max_x - 1], attr)
+                    gy += 1
+                stdscr.refresh()
+                stdscr.getch()
+                show_help = False
+                continue
 
             # Draw bar tabs
             tab_x = 0
@@ -469,52 +591,104 @@ def run_tui() -> None:
                     stdscr.addstr(2, tab_x, lbl, attr)
                     tab_x += len(lbl) + 1
 
-            info = f"Current Bar: {bar_title} ({slot_key}) | Edge: {pos.upper()} | Background: {bg}"
+            info = f"Current Bar: {bar_title} ({slot_key})  |  Edge: {pos.upper()}  |  Background: {bg}"
             stdscr.addstr(4, 0, info[:max_x - 1], curses.A_BOLD)
 
             list_start_y = 6
             footer_lines = 4
             avail_rows = max(1, max_y - list_start_y - footer_lines)
 
-            if row_idx < scroll_offset:
-                scroll_offset = row_idx
-            elif row_idx >= scroll_offset + avail_rows:
-                scroll_offset = row_idx - avail_rows + 1
-            scroll_offset = max(0, scroll_offset)
+            if flat_rows:
+                target_dli = flat_rows[row_idx][4]
+                # Keep the section header line visible when the first item in a section is selected
+                min_visible_dli = max(0, target_dli - 1)
+                if min_visible_dli < scroll_offset:
+                    scroll_offset = min_visible_dli
+                elif target_dli >= scroll_offset + avail_rows:
+                    scroll_offset = target_dli - avail_rows + 1
+            else:
+                scroll_offset = 0
+            scroll_offset = max(0, min(scroll_offset, max(0, len(display_lines) - avail_rows)))
 
             y = list_start_y
-            if not flat_rows:
-                stdscr.addstr(y, 2, "(No widgets on this bar — dormant if secondary)", curses.A_DIM)
-            else:
-                visible_slice = flat_rows[scroll_offset:scroll_offset + avail_rows]
-                for offset_i, (sec_key, sec_label, idx, eid) in enumerate(visible_slice):
-                    r_i = scroll_offset + offset_i
-                    if y >= max_y - footer_lines:
-                        break
-                    short = eid.split(".")[-1]
-                    line = f"  [{sec_label:10}]  {short:22} ({eid})"
-                    attr = curses.color_pair(2) | curses.A_BOLD if r_i == row_idx else 0
+            visible_slice = display_lines[scroll_offset:scroll_offset + avail_rows]
+            for kind, text, sel_i in visible_slice:
+                if y >= max_y - footer_lines:
+                    break
+                if kind == "header":
+                    pad_len = max(0, min(68, max_x - 2) - len(text))
+                    line = text + ("─" * pad_len)
+                    attr = curses.color_pair(1) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD
                     stdscr.addstr(y, 0, line[:max_x - 1], attr)
-                    y += 1
+                elif kind == "empty":
+                    stdscr.addstr(y, 0, text[:max_x - 1], curses.A_DIM)
+                elif kind == "item":
+                    selected = (sel_i == row_idx)
+                    prefix = "  ▸ " if selected else "    "
+                    line = prefix + text.lstrip(" •")
+                    attr = (curses.color_pair(2) | curses.A_BOLD) if selected else 0
+                    stdscr.addstr(y, 0, line[:max_x - 1], attr)
+                y += 1
 
-            # Permanent instructions + latest action status at the bottom
-            sec_hint = "1:T(top) 2:M(middle) 3:B(bottom)" if is_vert else "1:L(left) 2:M(middle) 3:R(right)"
-            help_line_1 = f"Navigate : Tab/←/→ switch bar | ↑/↓ (j/k) select widget | [/] reorder in section"
-            help_line_2 = f"Actions  : {sec_hint} | t/b/l/r send to Top/Bottom/Left/Right bar | g bg | m GUI | q quit"
+            # Permanent instructions + latest action status (or confirmation prompt) at the bottom
+            sec_hint = "1:T(top) 2:M(mid) 3:B(bot) 4:Tray" if is_vert else "1:L(left) 2:M(mid) 3:R(right) 4:Tray"
+            help_line_1 = "Navigate : Tab/←/→ switch bar | ↑/↓ (j/k) select widget | [/] reorder | ?:Guide | q:Quit"
+            help_line_2 = f"Actions  : {sec_hint} | t/b/l/r send to Top/Bottom/Left/Right | x/d:Remove | g:BG | m:GUI"
 
             if max_y >= 10:
-                stdscr.addstr(max_y - 3, 0, f"Status   : {status_msg}"[:max_x - 1],
-                              curses.color_pair(3) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD)
-                stdscr.addstr(max_y - 2, 0, help_line_1[:max_x - 1],
-                              curses.color_pair(4) if curses.has_colors() else curses.A_DIM)
-                stdscr.addstr(max_y - 1, 0, help_line_2[:max_x - 1],
-                              curses.color_pair(4) if curses.has_colors() else curses.A_DIM)
+                if pending_remove is not None:
+                    _pr_slot, pr_pos, pr_eid = pending_remove
+                    pr_short = pr_eid.split(".")[-1]
+                    prompt_str = f" CONFIRM REMOVE: Delete '{pr_short}' ({pr_eid}) from {pr_pos} bar? Press [y] to confirm or [n/Esc] to cancel "
+                    stdscr.addstr(
+                        max_y - 3,
+                        0,
+                        prompt_str[:max_x - 1],
+                        curses.color_pair(5) | curses.A_BOLD if curses.has_colors() else curses.A_REVERSE | curses.A_BOLD,
+                    )
+                else:
+                    stdscr.addstr(
+                        max_y - 3,
+                        0,
+                        f"Status   : {status_msg}"[:max_x - 1],
+                        curses.color_pair(3) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD,
+                    )
+                stdscr.addstr(
+                    max_y - 2,
+                    0,
+                    help_line_1[:max_x - 1],
+                    curses.color_pair(4) if curses.has_colors() else curses.A_DIM,
+                )
+                stdscr.addstr(
+                    max_y - 1,
+                    0,
+                    help_line_2[:max_x - 1],
+                    curses.color_pair(4) if curses.has_colors() else curses.A_DIM,
+                )
 
             stdscr.refresh()
             ch = stdscr.getch()
 
+            # Handle confirmation prompt first if active
+            if pending_remove is not None:
+                pr_slot, pr_pos, pr_eid = pending_remove
+                pr_short = pr_eid.split(".")[-1]
+                pending_remove = None
+                if ch in (ord("y"), ord("Y")):
+                    pop_from_layout(cfg[pr_slot]["layout"], pr_eid)
+                    save_config(cfg)
+                    if pr_slot == "bar":
+                        subprocess.run(["omarchy-shell", "-q", "shell", "reloadConfig"], check=False)
+                    call_ipc("reloadConfig")
+                    status_msg = f"Removed '{pr_short}' ({pr_eid}) from {pr_pos} bar ({pr_slot})."
+                else:
+                    status_msg = f"Cancelled removal of '{pr_short}'."
+                continue
+
             if ch in (ord("q"), ord("Q"), 27):
                 break
+            elif ch in (ord("?"), ord("h"), ord("H")):
+                show_help = True
             elif ch in (ord("\t"), curses.KEY_RIGHT):
                 bar_idx = (bar_idx + 1) % len(BAR_SLOTS)
                 row_idx = 0
@@ -542,8 +716,11 @@ def run_tui() -> None:
                     subprocess.run(["omarchy-shell", "-q", "shell", "reloadConfig"], check=False)
                 call_ipc("reloadConfig")
                 status_msg = f"Set {slot_key} background to '{nxt}'."
+            elif flat_rows and ch in (ord("x"), ord("X"), ord("d"), ord("D"), curses.KEY_DC, curses.KEY_BACKSPACE, 127):
+                _sk, _sl, _idx, eid, _dli = flat_rows[row_idx]
+                pending_remove = (slot_key, pos.upper(), eid)
             elif flat_rows and ch in (ord("["), ord("]")):
-                sec_key, sec_label, idx, eid = flat_rows[row_idx]
+                sec_key, sec_label, idx, eid, _dli = flat_rows[row_idx]
                 items = bbar["layout"].get(sec_key, [])
                 delta = -1 if ch == ord("[") else 1
                 new_idx = idx + delta
@@ -555,9 +732,9 @@ def run_tui() -> None:
                     call_ipc("reloadConfig")
                     follow_eid = eid
                     status_msg = f"Reordered '{eid.split('.')[-1]}' in {sec_label}."
-            elif flat_rows and ch in (ord("1"), ord("2"), ord("3")):
-                target_sec = {"1": "left", "2": "center", "3": "right"}[chr(ch)]
-                _sk, _sl, _idx, eid = flat_rows[row_idx]
+            elif flat_rows and ch in (ord("1"), ord("2"), ord("3"), ord("4")):
+                target_sec = {"1": "left", "2": "center", "3": "right", "4": "tray"}[chr(ch)]
+                _sk, _sl, _idx, eid, _dli = flat_rows[row_idx]
                 popped = pop_from_layout(bbar["layout"], eid) or {"id": eid}
                 bbar["layout"].setdefault(target_sec, []).append(popped)
                 save_config(cfg)
@@ -570,7 +747,7 @@ def run_tui() -> None:
                 edge_map = {ord("t"): "top", ord("b"): "bottom", ord("l"): "left", ord("r"): "right"}
                 target_edge = edge_map[ch]
                 dest_slot = resolve_bar_slot(cfg, target_edge)
-                sec_key, _sl, _idx, eid = flat_rows[row_idx]
+                sec_key, _sl, _idx, eid, _dli = flat_rows[row_idx]
                 popped = pop_from_layout(bbar["layout"], eid) or {"id": eid}
                 cfg[dest_slot]["layout"].setdefault(sec_key, []).append(popped)
                 save_config(cfg)
@@ -688,9 +865,11 @@ def main() -> None:
         ensure_all_bars(cfg)
         pruned = prune_invalid_entries(cfg)
         if not pruned:
-            print("All configured secondary bar widgets are valid.")
+            print("All configured bar widgets across all 4 bars are valid.")
             return
         save_config(cfg)
+        if any(slot_k == "bar" for slot_k, _ in pruned):
+            subprocess.run(["omarchy-shell", "-q", "shell", "reloadConfig"], check=False)
         call_ipc("reloadConfig")
         for slot_k, bad_id in pruned:
             print(f"Removed invalid plugin entry '{bad_id}' from {slot_k}.")
@@ -760,30 +939,51 @@ def main() -> None:
         return
 
     if sub in ("remove", "rm"):
-        if len(args) < 2:
-            sys.exit("Usage: omarchy mc-4bars remove <plugin-id>")
-        raw_pid = validate_plugin_id(args[1])
+        auto_yes = "-y" in args[1:] or "--yes" in args[1:]
+        pos_args = [a for a in args[1:] if a not in ("-y", "--yes")]
+        if not pos_args:
+            sys.exit("Usage: omarchy mc-4bars remove <plugin-id> [-y|--yes]")
+        raw_pid = validate_plugin_id(pos_args[0])
         cfg = load_config()
         ensure_all_bars(cfg)
-        removed_from = None
-        for slot_key, _def_pos, _label in BAR_SLOTS:
-            if slot_key == "bar":
-                continue
-            if pop_from_layout(cfg[slot_key]["layout"], raw_pid) is not None:
-                removed_from = slot_key
-        if removed_from is None:
+
+        # Find matching entry across all 4 bars (exact ID, short suffix, or resolved ID)
+        matches = []
+        for slot_key, def_pos, _label in BAR_SLOTS:
+            layout = cfg[slot_key]["layout"]
+            edge = cfg[slot_key].get("position", def_pos)
+            for sec in SECTIONS:
+                for item in layout.get(sec, []):
+                    eid = entry_id(item)
+                    if eid and (eid.lower() == raw_pid.lower() or eid.lower().endswith("." + raw_pid.lower())):
+                        matches.append((slot_key, edge, sec, eid))
+        if not matches:
             resolved_pid = resolve_plugin_id(cfg, raw_pid)
-            for slot_key, _def_pos, _label in BAR_SLOTS:
-                if slot_key == "bar":
-                    continue
-                if pop_from_layout(cfg[slot_key]["layout"], resolved_pid) is not None:
-                    removed_from = slot_key
-                    raw_pid = resolved_pid
-        if removed_from is None:
-            sys.exit(f"'{raw_pid}' was not found on any secondary bar.")
+            for slot_key, def_pos, _label in BAR_SLOTS:
+                layout = cfg[slot_key]["layout"]
+                edge = cfg[slot_key].get("position", def_pos)
+                for sec in SECTIONS:
+                    for item in layout.get(sec, []):
+                        eid = entry_id(item)
+                        if eid == resolved_pid:
+                            matches.append((slot_key, edge, sec, eid))
+
+        if not matches:
+            sys.exit(f"'{raw_pid}' was not found on any of the 4 bars.")
+
+        slot_key, edge, sec, target_eid = matches[0]
+        if not auto_yes and sys.stdin.isatty():
+            ans = input(f"Remove '{target_eid}' from {edge.upper()} bar ({slot_key}, section {sec})? [y/N]: ").strip().lower()
+            if ans not in ("y", "yes"):
+                print("Cancelled.")
+                return
+
+        pop_from_layout(cfg[slot_key]["layout"], target_eid)
         save_config(cfg)
+        if slot_key == "bar":
+            subprocess.run(["omarchy-shell", "-q", "shell", "reloadConfig"], check=False)
         call_ipc("reloadConfig")
-        print(f"Removed '{raw_pid}' from {removed_from}.")
+        print(f"Removed '{target_eid}' from {edge} bar ({slot_key}).")
         return
 
     if sub in ("position", "pos", "edge"):

@@ -21,13 +21,14 @@ PanelWindow {
 
   property var shellConfig: ({})
   property string activeBarTab: "bottomBar" // "bottomBar" | "leftBar" | "rightBar" | "bar"
+  property string pendingRemoveId: ""
 
   readonly property var barSlotKeys: ["bar", "bottomBar", "leftBar", "rightBar"]
 
   visible: false
   color: "transparent"
   surfaceFormat.opaque: false
-  implicitWidth: 820
+  implicitWidth: 920
   implicitHeight: 600
   WlrLayershell.namespace: "omarchy-menu"
   WlrLayershell.layer: WlrLayer.Overlay
@@ -155,6 +156,13 @@ PanelWindow {
       arr.splice(index, 1)
       arr.splice(targetIdx, 0, item)
       layout[section] = arr
+    }, barKey === "bar")
+  }
+
+  function removeWidget(barKey, pluginId) {
+    root.pendingRemoveId = ""
+    mutateShellConfig(function(cfg) {
+      popEntryFromLayout(cfg[barKey].layout, pluginId)
     }, barKey === "bar")
   }
 
@@ -480,7 +488,7 @@ PanelWindow {
           }
         }
 
-        // Three columns: L/M/R for horizontal bars (top/bottom) or T/M/B for vertical bars (left/right)
+        // Four columns: L/M/R + Tray for horizontal bars (top/bottom) or T/M/B + Tray for vertical bars (left/right)
         RowLayout {
           id: columnsRow
           readonly property bool isVerticalBar: {
@@ -495,7 +503,8 @@ PanelWindow {
             model: [
               { key: "left", titleH: "Left (L)", titleV: "Top (T)" },
               { key: "center", titleH: "Middle (M)", titleV: "Middle (M)" },
-              { key: "right", titleH: "Right (R)", titleV: "Bottom (B)" }
+              { key: "right", titleH: "Right (R)", titleV: "Bottom (B)" },
+              { key: "tray", titleH: "Tray", titleV: "Tray" }
             ]
             delegate: Rectangle {
               id: secCol
@@ -535,10 +544,11 @@ PanelWindow {
                     required property int index
                     readonly property string wid: BarModel.entryId(modelData)
                     readonly property var otherBars: root.otherBarDestinations(root.activeBarTab)
+                    readonly property bool confirmingDelete: root.pendingRemoveId === (root.activeBarTab + ":" + wid)
                     width: ListView.view.width
                     height: 68
                     radius: 4
-                    color: Qt.rgba(1, 1, 1, 0.06)
+                    color: confirmingDelete ? Qt.rgba(Commons.Color.urgent.r, Commons.Color.urgent.g, Commons.Color.urgent.b, 0.16) : Qt.rgba(1, 1, 1, 0.06)
 
                     ColumnLayout {
                       anchors.fill: parent
@@ -558,7 +568,7 @@ PanelWindow {
                         }
 
                         Text {
-                          visible: wid.indexOf(".") !== -1
+                          visible: wid.indexOf(".") !== -1 && !confirmingDelete
                           text: wid
                           color: Qt.rgba(Commons.Color.foreground.r, Commons.Color.foreground.g, Commons.Color.foreground.b, 0.55)
                           font.family: Style.font.family
@@ -566,9 +576,78 @@ PanelWindow {
                           elide: Text.ElideMiddle
                           Layout.fillWidth: true
                         }
+
+                        Item {
+                          visible: wid.indexOf(".") === -1 || confirmingDelete
+                          Layout.fillWidth: true
+                        }
+
+                        // Inline Remove with Confirmation
+                        RowLayout {
+                          spacing: 3
+
+                          Rectangle {
+                            visible: !confirmingDelete
+                            width: 18
+                            height: 16
+                            radius: 3
+                            color: delBtnMouse.containsMouse ? Qt.rgba(Commons.Color.urgent.r, Commons.Color.urgent.g, Commons.Color.urgent.b, 0.35) : Qt.rgba(1, 1, 1, 0.1)
+                            Text { anchors.centerIn: parent; text: "✕"; color: Commons.Color.foreground; font.pixelSize: 9 }
+                            MouseArea {
+                              id: delBtnMouse
+                              anchors.fill: parent
+                              hoverEnabled: true
+                              cursorShape: Qt.PointingHandCursor
+                              onClicked: root.pendingRemoveId = root.activeBarTab + ":" + wid
+                            }
+                          }
+
+                          Rectangle {
+                            visible: confirmingDelete
+                            implicitWidth: confirmYesText.implicitWidth + 10
+                            height: 16
+                            radius: 3
+                            color: Commons.Color.urgent
+                            Text {
+                              id: confirmYesText
+                              anchors.centerIn: parent
+                              text: "Remove?"
+                              color: Commons.Color.background
+                              font.family: Style.font.family
+                              font.pixelSize: 9
+                              font.bold: true
+                            }
+                            MouseArea {
+                              anchors.fill: parent
+                              cursorShape: Qt.PointingHandCursor
+                              onClicked: root.removeWidget(root.activeBarTab, wid)
+                            }
+                          }
+
+                          Rectangle {
+                            visible: confirmingDelete
+                            implicitWidth: confirmNoText.implicitWidth + 10
+                            height: 16
+                            radius: 3
+                            color: Qt.rgba(1, 1, 1, 0.16)
+                            Text {
+                              id: confirmNoText
+                              anchors.centerIn: parent
+                              text: "Cancel"
+                              color: Commons.Color.foreground
+                              font.family: Style.font.family
+                              font.pixelSize: 9
+                            }
+                            MouseArea {
+                              anchors.fill: parent
+                              cursorShape: Qt.PointingHandCursor
+                              onClicked: root.pendingRemoveId = ""
+                            }
+                          }
+                        }
                       }
 
-                      // Row 1: Section L/M/R (or T/M/B on vertical bars) + Up/Down order
+                      // Row 1: Section L/M/R/Tray (or T/M/B/Tray on vertical bars) + Reorder arrows
                       RowLayout {
                         Layout.fillWidth: true
                         spacing: 3
@@ -577,7 +656,8 @@ PanelWindow {
                           model: [
                             { s: "left", lH: "L", lV: "T" },
                             { s: "center", lH: "M", lV: "M" },
-                            { s: "right", lH: "R", lV: "B" }
+                            { s: "right", lH: "R", lV: "B" },
+                            { s: "tray", lH: "Tr", lV: "Tr" }
                           ]
                           delegate: Rectangle {
                             required property var modelData
