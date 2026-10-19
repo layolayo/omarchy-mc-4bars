@@ -537,13 +537,27 @@ PanelWindow {
                       anchors.margins: 5
                       spacing: 3
 
-                      Text {
-                        text: wid
-                        color: Commons.Color.foreground
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.small
-                        elide: Text.ElideMiddle
+                      RowLayout {
                         Layout.fillWidth: true
+                        spacing: 6
+
+                        Text {
+                          text: wid.indexOf(".") !== -1 ? wid.split(".").pop() : wid
+                          color: Commons.Color.foreground
+                          font.family: Style.font.family
+                          font.pixelSize: Style.font.small
+                          font.bold: true
+                        }
+
+                        Text {
+                          visible: wid.indexOf(".") !== -1
+                          text: wid
+                          color: Qt.rgba(Commons.Color.foreground.r, Commons.Color.foreground.g, Commons.Color.foreground.b, 0.55)
+                          font.family: Style.font.family
+                          font.pixelSize: 10
+                          elide: Text.ElideMiddle
+                          Layout.fillWidth: true
+                        }
                       }
 
                       // Row 1: Section L/M/R (or T/M/B on vertical bars) + Up/Down order
