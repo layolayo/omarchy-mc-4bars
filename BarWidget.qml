@@ -10,12 +10,13 @@ BarIconButton {
   property var service: null
 
   text: "󰕮"
+  tooltipText: "MC 4Bars — Quad-Edge Status Bar Manager"
 
-  function tooltipText() {
-    return "MC 4Bars — Quad-Edge Status Bar Manager"
-  }
-
-  onClicked: {
-    Quickshell.execDetached(["omarchy-shell", "shell", "toggle", "io.github.layolayo.mc-4bars", "{}"])
+  onPressed: function(button) {
+    if (button === Qt.LeftButton) {
+      Quickshell.execDetached(["omarchy-shell", "shell", "toggle", "io.github.layolayo.mc-4bars", "{}"])
+    } else if (button === Qt.MiddleButton) {
+      Quickshell.execDetached(["omarchy-shell", "io.github.layolayo.mc-4bars", "toggle"])
+    }
   }
 }

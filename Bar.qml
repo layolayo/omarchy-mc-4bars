@@ -108,6 +108,13 @@ Item {
     return config
   }
 
+  Timer {
+    id: hostReloadTimer
+    interval: 60
+    repeat: false
+    onTriggered: Util.execArgv(["omarchy-shell", "-q", "shell", "reloadConfig"])
+  }
+
   function readCurrentConfig() {
     var base = null
     if (Util.isPlainObject(root.cachedConfig)) {
@@ -122,10 +129,6 @@ Item {
       }
     }
     if (!base) return null
-    if (root.shell && Util.isPlainObject(root.shell.barConfig) && root.shell.barConfig.position) {
-      if (!Util.isPlainObject(base.bar)) base.bar = {}
-      base.bar.position = BarModel.normalizePosition(root.shell.barConfig.position)
-    }
     return ensureAllBarSlots(base)
   }
 
@@ -149,7 +152,7 @@ Item {
     coordinatorConfigFile.setText(JSON.stringify(config, null, 2) + "\n")
     root.suppressSwapWatch = false
     if (reloadHostShell) {
-      Util.execArgv(["omarchy-shell", "-q", "shell", "reloadConfig"])
+      hostReloadTimer.restart()
     }
   }
 
