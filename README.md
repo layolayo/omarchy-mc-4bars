@@ -72,27 +72,29 @@ Displays all 4 bar slots (`bar`, `bottomBar`, `leftBar`, `rightBar`), their assi
 
 ### 2. Move Widgets Between Any of the 4 Bars (`top`, `bottom`, `left`, `right`)
 
-Move a widget to a specific edge bar (`top`, `bottom`, `left`, `right`) and section (`L`, `M`, `R`):
+Horizontal bars (`top`, `bottom`) use **`L`** (Left), **`M`** (Middle/Centre), **`R`** (Right).
+Vertical bars (`left`, `right`) use **`T`** (Top), **`M`** (Middle/Centre), **`B`** (Bottom).
 
 ```bash
 # Move 'voxtype' to the bottom bar's Middle/Centre (M) section:
 omarchy mc-4bars bottom voxtype M
 
-# Move 'weather' to the left vertical bar's Top/Left (L) section:
-omarchy mc-4bars left weather L
+# Move 'omarchygotchi' and 'omagames' to the left vertical bar's Top (T) section:
+omarchy mc-4bars left omarchygotchi T
+omarchy mc-4bars left omagames T
 
-# Move 'cpu' to the right vertical bar's Bottom/Right (R) section:
-omarchy mc-4bars right cpu R
+# Move 'weather' to the right vertical bar's Bottom (B) section:
+omarchy mc-4bars right weather B
 
 # Return 'voxtype' to the top bar's Right (R) section:
 omarchy mc-4bars top voxtype R
 ```
 
-You can also use `move <plugin-id> [edge-or-slot] <L|M|R>` with ordering flags (`--before <id>`, `--after <id>`, `--index <n>`):
+You can also use `move <plugin-id> [edge-or-slot] <L|M|R|T|B>` with ordering flags (`--before <id>`, `--after <id>`, `--index <n>`):
 
 ```bash
 omarchy mc-4bars move voxtype bottom M
-omarchy mc-4bars move tailscale left L --index 0
+omarchy mc-4bars move tailscale left T --index 0
 omarchy mc-4bars move bluetooth top R --before audio
 ```
 

@@ -13,12 +13,12 @@ Examples:
   omarchy mc-4bars show   [top|bottom|left|right|all]
   omarchy mc-4bars hide   [top|bottom|left|right|all]
   omarchy mc-4bars swap   <top|bottom|left|right> <top|bottom|left|right>
-  omarchy mc-4bars move   <plugin-id> [top|bottom|left|right] <L|M|R> [--before <id>|--after <id>|--index <n>]
+  omarchy mc-4bars move   <plugin-id> [top|bottom|left|right] <L|M|R|T|B> [--before <id>|--after <id>|--index <n>]
   omarchy mc-4bars top    <plugin-id> [L|M|R]
   omarchy mc-4bars bottom <plugin-id> [L|M|R]
-  omarchy mc-4bars left   <plugin-id> [L|M|R]
-  omarchy mc-4bars right  <plugin-id> [L|M|R]
-  omarchy mc-4bars <plugin-id> <L|M|R>
+  omarchy mc-4bars left   <plugin-id> [T|M|B]
+  omarchy mc-4bars right  <plugin-id> [T|M|B]
+  omarchy mc-4bars <plugin-id> <L|M|R|T|B>
   omarchy mc-4bars position <bottom|top|left|right> [source-edge-or-slot]
   omarchy mc-4bars background <none|glassy|opaque|cycle> [edge-or-slot]
 """
@@ -47,6 +47,8 @@ SAFE_PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SECTION_ALIASES = {
     "l": "left",
     "left": "left",
+    "t": "left",
+    "top": "left",
     "m": "center",
     "mid": "center",
     "middle": "center",
@@ -55,7 +57,9 @@ SECTION_ALIASES = {
     "centre": "center",
     "r": "right",
     "right": "right",
-    "t": "tray",
+    "b": "right",
+    "bot": "right",
+    "bottom": "right",
     "tray": "tray",
 }
 
@@ -112,7 +116,7 @@ def resolve_section(raw: str) -> str:
     key = (raw or "").strip().lower()
     if key not in SECTION_ALIASES:
         sys.exit(
-            f"Unknown section '{raw}'. Use L (left), M (middle/centre), R (right), or tray."
+            f"Unknown section '{raw}'. Use L/M/R (horizontal), T/M/B (vertical), or tray."
         )
     return SECTION_ALIASES[key]
 
@@ -251,7 +255,10 @@ def print_layout(cfg: dict) -> None:
         total = count_widgets(layout)
         state = "active" if (total > 0 or slot_key == "bar") else "dormant (0 surfaces)"
         print(f"{title} [{slot_key}] — edge: {pos}, background: {bg}, status: {state}")
-        labels = [("L (left)", "left"), ("M (center)", "center"), ("R (right)", "right"), ("Tray", "tray")]
+        if pos in ("left", "right"):
+            labels = [("T (top)", "left"), ("M (middle)", "center"), ("B (bottom)", "right"), ("Tray", "tray")]
+        else:
+            labels = [("L (left)", "left"), ("M (middle)", "center"), ("R (right)", "right"), ("Tray", "tray")]
         for label, sec in labels:
             items = layout.get(sec, [])
             if not items and sec == "tray":
@@ -320,7 +327,11 @@ def cmd_move(plugin_id_raw: str, section_raw: str, extra_args: list, target_bar_
     call_ipc("reloadConfig")
 
     edge = dest_bar.get("position", "bottom")
-    print(f"Positioned '{plugin_id}' on {edge} bar ({dest_slot}) in section '{sec}'.")
+    if edge in ("left", "right"):
+        sec_display = {"left": "T (top)", "center": "M (middle)", "right": "B (bottom)", "tray": "tray"}.get(sec, sec)
+    else:
+        sec_display = {"left": "L (left)", "center": "M (middle)", "right": "R (right)", "tray": "tray"}.get(sec, sec)
+    print(f"Positioned '{plugin_id}' on {edge} bar ({dest_slot}) in section '{sec_display}'.")
 
 
 def move_or_swap_edge(cfg: dict, source_slot: str, target_edge: str) -> tuple[str, str]:

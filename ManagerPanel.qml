@@ -472,22 +472,28 @@ PanelWindow {
           }
         }
 
-        // Three columns: Left (L), Middle (M), Right (R)
+        // Three columns: L/M/R for horizontal bars (top/bottom) or T/M/B for vertical bars (left/right)
         RowLayout {
+          id: columnsRow
+          readonly property bool isVerticalBar: {
+            var e = root.barEdge(root.activeBarTab)
+            return e === "left" || e === "right"
+          }
           Layout.fillWidth: true
           Layout.fillHeight: true
           spacing: 10
 
           Repeater {
             model: [
-              { key: "left", title: "Left / Top (L)" },
-              { key: "center", title: "Middle / Centre (M)" },
-              { key: "right", title: "Right / Bottom (R)" }
+              { key: "left", titleH: "Left (L)", titleV: "Top (T)" },
+              { key: "center", titleH: "Middle (M)", titleV: "Middle (M)" },
+              { key: "right", titleH: "Right (R)", titleV: "Bottom (B)" }
             ]
             delegate: Rectangle {
               id: secCol
               required property var modelData
               readonly property string secKey: modelData.key
+              readonly property string colTitle: columnsRow.isVerticalBar ? modelData.titleV : modelData.titleH
               readonly property var items: root.sectionEntries(root.activeBarTab, secKey)
               Layout.fillWidth: true
               Layout.fillHeight: true
@@ -502,7 +508,7 @@ PanelWindow {
                 spacing: 6
 
                 Text {
-                  text: secCol.modelData.title + " (" + secCol.items.length + ")"
+                  text: secCol.colTitle + " (" + secCol.items.length + ")"
                   color: Commons.Color.accent
                   font.family: Style.font.family
                   font.pixelSize: Style.font.body
@@ -540,16 +546,16 @@ PanelWindow {
                         Layout.fillWidth: true
                       }
 
-                      // Row 1: Section L/M/R on current bar + Up/Down order
+                      // Row 1: Section L/M/R (or T/M/B on vertical bars) + Up/Down order
                       RowLayout {
                         Layout.fillWidth: true
                         spacing: 3
 
                         Repeater {
                           model: [
-                            { s: "left", l: "L" },
-                            { s: "center", l: "M" },
-                            { s: "right", l: "R" }
+                            { s: "left", lH: "L", lV: "T" },
+                            { s: "center", lH: "M", lV: "M" },
+                            { s: "right", lH: "R", lV: "B" }
                           ]
                           delegate: Rectangle {
                             required property var modelData
@@ -561,7 +567,7 @@ PanelWindow {
 
                             Text {
                               anchors.centerIn: parent
-                              text: modelData.l
+                              text: columnsRow.isVerticalBar ? modelData.lV : modelData.lH
                               color: activeSec ? Commons.Color.background : Commons.Color.foreground
                               font.family: Style.font.family
                               font.pixelSize: 10
