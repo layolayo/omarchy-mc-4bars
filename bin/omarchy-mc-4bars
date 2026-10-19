@@ -823,30 +823,39 @@ def parse_move_flags(args: list):
 
 def cmd_move(plugin_id_raw: str, section_raw: str, extra_args: list, target_bar_or_edge: str = "bottomBar") -> None:
     sec = resolve_section(section_raw)
-    before, after, index = parse_move_flags(extra_args)
+    before_raw, after_raw, index = parse_move_flags(extra_args)
 
     cfg = load_config()
     ensure_all_bars(cfg)
     pruned = prune_invalid_entries(cfg)
-    plugin_id = resolve_plugin_id(cfg, plugin_id_raw)
+    before = resolve_plugin_id(cfg, before_raw) if before_raw else None
+    after = resolve_plugin_id(cfg, after_raw) if after_raw else None
+
+    raw_items = [p.strip() for p in plugin_id_raw.split(",") if p.strip()]
+    if not raw_items:
+        sys.exit(f"Invalid plugin ID: '{plugin_id_raw}'.")
+    plugin_ids = [resolve_plugin_id(cfg, p) for p in raw_items]
+
     dest_slot = resolve_bar_slot(cfg, target_bar_or_edge)
     rescan_needed = ensure_plugin_enabled(cfg, PLUGIN_ID)
 
-    # Extract existing entry (preserving inline settings) from any of the 4 bars
-    existing_entry = None
     touched_primary = dest_slot == "bar"
-    for slot_key, _def_pos, _label in BAR_SLOTS:
-        popped = pop_from_layout(cfg[slot_key]["layout"], plugin_id)
-        if popped is not None:
-            if slot_key == "bar":
-                touched_primary = True
-            if existing_entry is None:
-                existing_entry = popped
-
-    entry = existing_entry if existing_entry is not None else {"id": plugin_id}
     dest_bar = cfg[dest_slot]
     dest_bar["layout"].setdefault(sec, [])
-    insert_into_section(dest_bar["layout"][sec], entry, before=before, after=after, index=index)
+
+    for plugin_id in plugin_ids:
+        existing_entry = None
+        for slot_key, _def_pos, _label in BAR_SLOTS:
+            popped = pop_from_layout(cfg[slot_key]["layout"], plugin_id)
+            if popped is not None:
+                if slot_key == "bar":
+                    touched_primary = True
+                if existing_entry is None:
+                    existing_entry = popped
+        entry = existing_entry if existing_entry is not None else {"id": plugin_id}
+        insert_into_section(dest_bar["layout"][sec], entry, before=before, after=after, index=index)
+        if after:
+            after = plugin_id
 
     save_config(cfg)
     if rescan_needed:
@@ -862,7 +871,8 @@ def cmd_move(plugin_id_raw: str, section_raw: str, extra_args: list, target_bar_
         sec_display = {"left": "T (top)", "center": "M (middle)", "right": "B (bottom)", "tray": "tray"}.get(sec, sec)
     else:
         sec_display = {"left": "L (left)", "center": "M (middle)", "right": "R (right)", "tray": "tray"}.get(sec, sec)
-    print(f"Positioned '{plugin_id}' on {edge} bar ({dest_slot}) in section '{sec_display}'.")
+    for plugin_id in plugin_ids:
+        print(f"Positioned '{plugin_id}' on {edge} bar ({dest_slot}) in section '{sec_display}'.")
 
 
 def move_or_swap_edge(cfg: dict, source_slot: str, target_edge: str) -> tuple[str, str]:
@@ -889,11 +899,11 @@ def move_or_swap_edge(cfg: dict, source_slot: str, target_edge: str) -> tuple[st
 
 def main() -> None:
     args = sys.argv[1:]
-    if not args or args[0] in ("list", "ls", "status"):
+    if not args or args[0].lower() in ("list", "ls", "status"):
         print_layout(load_config())
         return
 
-    sub = args[0]
+    sub = args[0].lower()
     if sub in ("-h", "--help", "help"):
         print(__doc__.strip())
         return
