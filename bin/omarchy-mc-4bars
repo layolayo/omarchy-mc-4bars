@@ -520,9 +520,9 @@ def run_tui() -> None:
             bg = bbar.get("background", "none")
             is_vert = pos in ("left", "right")
             sec_names = [
-                ("left", "T (top)" if is_vert else "L (left)", "1"),
-                ("center", "M (middle)", "2"),
-                ("right", "B (bottom)" if is_vert else "R (right)", "3"),
+                ("left", "T (top)" if is_vert else "L (left)", "1 / T" if is_vert else "1 / L"),
+                ("center", "M (middle)", "2 / M"),
+                ("right", "B (bottom)" if is_vert else "R (right)", "3 / B" if is_vert else "3 / R"),
                 ("tray", "Tray (drawer)", "4"),
             ]
             sec_label_map = {k: lbl for k, lbl, _hk in sec_names}
@@ -583,9 +583,9 @@ def run_tui() -> None:
                     "│    Tab    or  ← / →       Switch between the 4 Bars (Primary, Bottom, L, R)    │",
                     "│                                                                                │",
                     "│  MOVE SELECTED WIDGET WITHIN CURRENT BAR (SECTIONS)                            │",
-                    "│    1                      Move to L (left)   [or T (top) on vertical bars]     │",
-                    "│    2                      Move to M (middle)                                   │",
-                    "│    3                      Move to R (right)  [or B (bottom) on vertical bars]  │",
+                    "│    1  or  Shift+L / T     Move to L (left)   [or T (top) on vertical bars]     │",
+                    "│    2  or  M / m           Move to M (middle)                                   │",
+                    "│    3  or  Shift+R / B     Move to R (right)  [or B (bottom) on vertical bars]  │",
                     "│    4                      Move to Tray (drawer)                                │",
                     "│    [  or  ]               Reorder selected widget earlier/later in its section │",
                     "│                                                                                │",
@@ -598,7 +598,7 @@ def run_tui() -> None:
                     "│  REMOVE / BAR APPEARANCE / EXIT                                                │",
                     "│    x  or  d  or  Delete   Remove selected widget (asks [y/n] confirmation)     │",
                     "│    g                      Cycle current bar background (none → glassy → opaque)│",
-                    "│    m                      Open graphical point-and-click GUI Manager           │",
+                    "│    o                      Open graphical point-and-click GUI Manager           │",
                     "│    ?  or  h               Toggle this Instructions & Guide screen              │",
                     "│    q  or  Esc             Quit the TUI                                         │",
                     "└────────────────────────────────────────────────────────────────────────────────┘",
@@ -669,9 +669,9 @@ def run_tui() -> None:
                 y += 1
 
             # Permanent instructions + latest action status (or confirmation prompt) at the bottom
-            sec_hint = "1:T(top) 2:M(mid) 3:B(bot) 4:Tray" if is_vert else "1:L(left) 2:M(mid) 3:R(right) 4:Tray"
+            sec_hint = "1/T:Top 2/M:Mid 3/B:Bot 4:Tray" if is_vert else "1/L:Left 2/M:Mid 3/R:Right 4:Tray"
             help_line_1 = "Navigate : Tab/←/→ switch bar | ↑/↓ (j/k) select widget | [/] reorder | ?:Guide | q:Quit"
-            help_line_2 = f"Actions  : {sec_hint} | t/b/l/r send to Top/Bottom/Left/Right | x/d:Remove | g:BG | m:GUI"
+            help_line_2 = f"Actions  : {sec_hint} | t/b/l/r:→Top/Bot/Left/Right Bar | x:Remove | g:BG | o:GUI"
 
             if max_y >= 10:
                 if pending_remove is not None:
@@ -743,7 +743,7 @@ def run_tui() -> None:
             elif ch in (curses.KEY_DOWN, ord("j")):
                 if flat_rows:
                     row_idx = (row_idx + 1) % len(flat_rows)
-            elif ch in (ord("m"), ord("M")):
+            elif ch in (ord("o"), ord("O")):
                 subprocess.run(
                     ["omarchy-shell", "-q", "shell", "toggle", PLUGIN_ID, "{}"],
                     stdin=subprocess.DEVNULL,
@@ -774,8 +774,24 @@ def run_tui() -> None:
                     _tui_reload(slot_key == "bar")
                     follow_eid = eid
                     status_msg = f"Reordered '{eid.split('.')[-1]}' in {sec_label}."
-            elif flat_rows and ch in (ord("1"), ord("2"), ord("3"), ord("4")):
-                target_sec = {"1": "left", "2": "center", "3": "right", "4": "tray"}[chr(ch)]
+            elif flat_rows and (
+                ch in (ord("1"), ord("2"), ord("3"), ord("4"), ord("m"), ord("M"))
+                or (is_vert and ch in (ord("T"), ord("B")))
+                or (not is_vert and ch in (ord("L"), ord("R")))
+            ):
+                sec_key_map = {
+                    ord("1"): "left",
+                    ord("2"): "center",
+                    ord("3"): "right",
+                    ord("4"): "tray",
+                    ord("m"): "center",
+                    ord("M"): "center",
+                    ord("L"): "left",
+                    ord("T"): "left",
+                    ord("R"): "right",
+                    ord("B"): "right",
+                }
+                target_sec = sec_key_map[ch]
                 _sk, _sl, _idx, eid, _dli = flat_rows[row_idx]
                 popped = pop_from_layout(bbar["layout"], eid) or {"id": eid}
                 bbar["layout"].setdefault(target_sec, []).append(popped)
@@ -783,8 +799,17 @@ def run_tui() -> None:
                 _tui_reload(slot_key == "bar")
                 follow_eid = eid
                 status_msg = f"Moved '{eid.split('.')[-1]}' to {sec_label_map[target_sec]} on {pos.upper()} bar."
-            elif flat_rows and ch in (ord("t"), ord("b"), ord("l"), ord("r")):
-                edge_map = {ord("t"): "top", ord("b"): "bottom", ord("l"): "left", ord("r"): "right"}
+            elif flat_rows and ch in (ord("t"), ord("b"), ord("l"), ord("r"), ord("T"), ord("B"), ord("L"), ord("R")):
+                edge_map = {
+                    ord("t"): "top",
+                    ord("T"): "top",
+                    ord("b"): "bottom",
+                    ord("B"): "bottom",
+                    ord("l"): "left",
+                    ord("L"): "left",
+                    ord("r"): "right",
+                    ord("R"): "right",
+                }
                 target_edge = edge_map[ch]
                 dest_slot = resolve_bar_slot(cfg, target_edge)
                 sec_key, _sl, _idx, eid, _dli = flat_rows[row_idx]
