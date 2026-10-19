@@ -142,7 +142,7 @@ Item {
     id: userShellConfigFile
     path: root.omarchyConfigDir + "/shell.json"
     watchChanges: true
-    atomicWrites: true
+    atomicWrites: false
     printErrors: false
     onLoaded: root.reloadBottomBarConfig()
     onLoadFailed: root.reloadBottomBarConfig()
@@ -151,6 +151,14 @@ Item {
 
   function reloadConfigFile() {
     userShellConfigFile.reload()
+  }
+
+  function applyConfigObject(cfgObj) {
+    if (Util.isPlainObject(cfgObj)) {
+      root.barConfig = JSON.parse(JSON.stringify(cfgObj))
+    } else {
+      root.barConfig = fallbackBarConfig
+    }
   }
 
   function reloadBottomBarConfig() {
@@ -173,6 +181,9 @@ Item {
 
   function mutateBottomBarConfig(mutator) {
     if (typeof mutator !== "function") return false
+    if (root.controller && typeof root.controller.mutateBarSlot === "function") {
+      return root.controller.mutateBarSlot(root.barKey, mutator)
+    }
     var raw = String(userShellConfigFile.text() || "").trim()
     var config = { version: 1 }
     if (raw) {
@@ -194,9 +205,6 @@ Item {
     config.version = 1
     root.barConfig = JSON.parse(JSON.stringify(config[root.barKey]))
     userShellConfigFile.setText(JSON.stringify(config, null, 2) + "\n")
-    if (root.controller && typeof root.controller.notifyConfigMutated === "function") {
-      root.controller.notifyConfigMutated()
-    }
     return true
   }
 
@@ -869,16 +877,14 @@ Item {
   readonly property bool vertical: position === "left" || position === "right"
   readonly property int barSize: vertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
 
-  readonly property var displayCutouts: displayCutoutsFile.missing ? [] : BarModel.parseCutouts(displayCutoutsFile.text())
+  property var displayCutouts: []
   FileView {
     id: displayCutoutsFile
-    property bool missing: false
     path: "/usr/share/omarchy-platform/display-cutouts.json"
-    blockLoading: true
     watchChanges: true
     printErrors: false
-    onLoaded: missing = false
-    onLoadFailed: missing = true
+    onLoaded: root.displayCutouts = BarModel.parseCutouts(text())
+    onLoadFailed: root.displayCutouts = []
     onFileChanged: reload()
   }
 

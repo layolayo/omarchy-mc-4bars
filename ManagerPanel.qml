@@ -47,7 +47,7 @@ PanelWindow {
     id: shellConfigFile
     path: root.shellJsonPath
     watchChanges: true
-    atomicWrites: true
+    atomicWrites: false
     printErrors: false
     onLoaded: root.parseConfig()
     onFileChanged: reload()
@@ -102,9 +102,9 @@ PanelWindow {
       root.shellConfig = cfg
       shellConfigFile.setText(JSON.stringify(cfg, null, 2) + "\n")
       if (rescanPrimaryBar) {
-        Quickshell.execDetached(["omarchy-shell", "shell", "rescanPlugins"])
+        Quickshell.execDetached(["omarchy-shell", "-q", "shell", "reloadConfig"])
       }
-      Quickshell.execDetached(["omarchy-shell", "io.github.layolayo.mc-4bars", "reloadConfig"])
+      Quickshell.execDetached(["omarchy-shell", "-q", "io.github.layolayo.mc-4bars", "reloadConfig"])
     } catch (e) {
       console.warn("io.github.layolayo.mc-4bars: ManagerPanel failed to save shell.json:", e)
     }
