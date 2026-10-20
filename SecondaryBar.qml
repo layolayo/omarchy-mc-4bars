@@ -1499,6 +1499,8 @@ Item {
     onTriggered: if (!root.targetTooltipHovered(root.tooltipTarget)) root.hideTooltip(root.tooltipTarget)
   }
 
+  property bool fullscreenDesktop: false
+  property int hyprFullscreenSerial: 0
   property double lastToggleMs: 0
 
   Process {
@@ -1508,6 +1510,13 @@ Item {
     onExited: function(exitCode) { root.barHidden = (exitCode === 0) }
   }
 
+  Process {
+    id: fullscreenDesktopProbe
+    running: true
+    command: ["test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
+    onExited: function(exitCode) { root.fullscreenDesktop = (exitCode === 0) }
+  }
+
   FileView {
     path: root.home + "/.local/state/omarchy/toggles"
     watchChanges: true
@@ -1515,8 +1524,43 @@ Item {
     onFileChanged: barHiddenProbe.running = true
   }
 
+  FileView {
+    path: root.home + "/.local/state/omarchy/toggles/hypr"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: fullscreenDesktopProbe.running = true
+  }
+
+  Timer {
+    id: hyprRefreshFollowupTimer
+    interval: 60
+    repeat: false
+    onTriggered: root.hyprFullscreenSerial += 1
+  }
+
+  function refreshHyprFullscreenState() {
+    Hyprland.refreshWorkspaces()
+    Hyprland.refreshToplevels()
+    root.hyprFullscreenSerial += 1
+    hyprRefreshFollowupTimer.restart()
+  }
+
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      var name = event ? String(event.name) : ""
+      if (name === "fullscreen" || name === "workspace" || name === "workspacev2" ||
+          name === "focusedmon" || name === "activewindow" || name === "activewindowv2" ||
+          name === "openwindow" || name === "closewindow" || name === "movewindow") {
+        root.refreshHyprFullscreenState()
+      }
+    }
+  }
+
   function syncHiddenState() {
     barHiddenProbe.running = true
+    fullscreenDesktopProbe.running = true
+    root.refreshHyprFullscreenState()
   }
 
   function toggleBarVisibility() {
@@ -1582,13 +1626,47 @@ Item {
   component BarPanel: PanelWindow {
     id: barWindow
 
-    readonly property bool effectiveHidden: root.barHidden
+    readonly property var monitor: Hyprland.monitorFor(screen)
+    readonly property var activeWorkspace: monitor ? monitor.activeWorkspace : null
+    onActiveWorkspaceChanged: root.refreshHyprFullscreenState()
+    readonly property int workspaceId: activeWorkspace ? activeWorkspace.id : -1
+    readonly property int fullscreenMode: {
+      var serial = root.hyprFullscreenSerial
+      var mode = 0
+      var wsIpc = activeWorkspace ? activeWorkspace.lastIpcObject : null
+      if (wsIpc && wsIpc.hasfullscreen) mode = 2
+      var toplevels = Hyprland.toplevels.values
+      for (var i = 0; i < toplevels.length; i++) {
+        var toplevel = toplevels[i]
+        if (!toplevel || !toplevel.workspace || toplevel.workspace.id !== workspaceId) continue
+        var ipc = toplevel.lastIpcObject
+        var fs = ipc && ipc.fullscreen ? Number(ipc.fullscreen) : 0
+        var fsc = ipc && ipc.fullscreenClient ? Number(ipc.fullscreenClient) : 0
+        mode = Math.max(mode, fs, fsc)
+      }
+      return mode
+    }
+    readonly property bool screenFullscreen: fullscreenMode >= 2
+    readonly property bool effectiveHidden: root.barHidden || root.fullscreenDesktop || screenFullscreen
+    onEffectiveHiddenChanged: {
+      if (effectiveHidden) {
+        root.clearTooltip()
+        if (root.activePopout && "close" in root.activePopout) root.activePopout.close()
+      }
+    }
 
-    Region { id: emptyInputMask }
+    Timer {
+      interval: 300
+      running: true
+      repeat: false
+      onTriggered: root.refreshHyprFullscreenState()
+    }
 
     visible: !remapGuard.remapping && (cutoutWaitOver || !cutoutPending)
     exclusionMode: effectiveHidden ? ExclusionMode.Ignore : ExclusionMode.Auto
-    mask: effectiveHidden ? emptyInputMask : null
+    mask: Region {
+      item: !barWindow.effectiveHidden ? barContentLoader : null
+    }
 
     ScreenMoveRemap {
       id: remapGuard
@@ -1614,7 +1692,10 @@ Item {
     readonly property bool cutoutPending: BarModel.cutoutPending(root.displayCutouts, root.position, screen.name, screen.width, screen.height, screen.devicePixelRatio, panelMode)
     property bool cutoutWaitOver: false
     onCutoutPendingChanged: if (!cutoutPending) cutoutWaitOver = true
-    Component.onCompleted: if (!cutoutPending) cutoutWaitOver = true
+    Component.onCompleted: {
+      if (!cutoutPending) cutoutWaitOver = true
+      root.refreshHyprFullscreenState()
+    }
 
     Timer {
       interval: 2000
@@ -1632,6 +1713,7 @@ Item {
     WlrLayershell.layer: WlrLayer.Top
 
     Loader {
+      id: barContentLoader
       anchors.fill: parent
       visible: !barWindow.effectiveHidden
       opacity: barWindow.effectiveHidden ? 0 : 1
@@ -1646,7 +1728,7 @@ Item {
     PopupWindow {
       id: tooltipWindow
 
-      visible: root.tooltipShown && root.tooltipTarget !== null && root.tooltipText !== "" && root.targetBelongsToWindow(root.tooltipTarget, barWindow)
+      visible: !barWindow.effectiveHidden && root.tooltipShown && root.tooltipTarget !== null && root.tooltipText !== "" && root.targetBelongsToWindow(root.tooltipTarget, barWindow)
       color: "transparent"
       implicitWidth: Math.ceil(tooltipBubble.implicitWidth)
       implicitHeight: Math.ceil(tooltipBubble.implicitHeight)
