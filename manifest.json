@@ -12,6 +12,7 @@
     "panel",
     "bar-widget"
   ],
+  "keepLoaded": true,
   "barWidget": {
     "defaultSection": "right"
   },

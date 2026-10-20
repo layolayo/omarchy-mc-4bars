@@ -20,7 +20,7 @@ PanelWindow {
   readonly property string shellJsonPath: home + "/.config/omarchy/shell.json"
 
   property var shellConfig: ({})
-  property string activeBarTab: "bottomBar" // "bottomBar" | "leftBar" | "rightBar" | "bar"
+  property string activeBarTab: "bar" // "bar" (Top) | "bottomBar" (Bottom) | "leftBar" (Left) | "rightBar" (Right)
   property string pendingRemoveId: ""
 
   readonly property var barSlotKeys: ["bar", "bottomBar", "leftBar", "rightBar"]
@@ -48,7 +48,7 @@ PanelWindow {
     id: shellConfigFile
     path: root.shellJsonPath
     watchChanges: true
-    atomicWrites: false
+    atomicWrites: true
     printErrors: false
     onLoaded: root.parseConfig()
     onFileChanged: reload()
@@ -75,6 +75,15 @@ PanelWindow {
         cfg[k].layout = { left: [], center: [], right: [] }
       }
     }
+    if (!Array.isArray(cfg.plugins)) cfg.plugins = []
+    var hasSelf = false
+    for (var p = 0; p < cfg.plugins.length; p++) {
+      if (BarModel.entryId(cfg.plugins[p]) === "io.github.layolayo.mc-4bars") {
+        hasSelf = true
+        break
+      }
+    }
+    if (!hasSelf) cfg.plugins.push({ id: "io.github.layolayo.mc-4bars" })
   }
 
   function parseConfig() {
@@ -93,6 +102,9 @@ PanelWindow {
 
   function mutateShellConfig(mutator, rescanPrimaryBar) {
     var raw = String(shellConfigFile.text() || "").trim()
+    if (!raw && BarModel.isPlainObject(root.shellConfig) && root.shellConfig.version === 1) {
+      raw = JSON.stringify(root.shellConfig)
+    }
     if (!raw) return
     try {
       var cfg = JSON.parse(raw)
@@ -102,10 +114,14 @@ PanelWindow {
       cfg.version = 1
       root.shellConfig = cfg
       shellConfigFile.setText(JSON.stringify(cfg, null, 2) + "\n")
+      if (root.service && typeof root.service.reloadAllBars === "function") {
+        root.service.reloadAllBars()
+      } else {
+        Quickshell.execDetached(["omarchy-shell", "-q", "io.github.layolayo.mc-4bars", "reloadConfig"])
+      }
       if (rescanPrimaryBar) {
         Quickshell.execDetached(["omarchy-shell", "-q", "shell", "reloadConfig"])
       }
-      Quickshell.execDetached(["omarchy-shell", "-q", "io.github.layolayo.mc-4bars", "reloadConfig"])
     } catch (e) {
       console.warn("io.github.layolayo.mc-4bars: ManagerPanel failed to save shell.json:", e)
     }
@@ -149,42 +165,48 @@ PanelWindow {
 
   function moveWidget(pluginId, destBarKey, destSection) {
     if (!BarModel.isSafePluginId(pluginId)) return
-    mutateShellConfig(function(cfg) {
-      var entry = null
-      for (var i = 0; i < root.barSlotKeys.length; i++) {
-        var k = root.barSlotKeys[i]
-        var popped = popEntryFromLayout(cfg[k].layout, pluginId)
-        if (popped !== null && entry === null) entry = popped
-      }
-      if (entry === null) entry = { id: pluginId }
-      var targetLayout = cfg[destBarKey].layout
-      var finalSec = destSection
-      if (finalSec === "tray" && (!layoutHasTray(targetLayout) || pluginId === "omarchy.tray")) {
-        finalSec = destBarKey === "bar" ? "right" : "center"
-      }
-      if (!Array.isArray(targetLayout[finalSec])) targetLayout[finalSec] = []
-      targetLayout[finalSec].push(entry)
-    }, true)
+    Qt.callLater(function() {
+      mutateShellConfig(function(cfg) {
+        var entry = null
+        for (var i = 0; i < root.barSlotKeys.length; i++) {
+          var k = root.barSlotKeys[i]
+          var popped = popEntryFromLayout(cfg[k].layout, pluginId)
+          if (popped !== null && entry === null) entry = popped
+        }
+        if (entry === null) entry = { id: pluginId }
+        var targetLayout = cfg[destBarKey].layout
+        var finalSec = destSection
+        if (finalSec === "tray" && (!layoutHasTray(targetLayout) || pluginId === "omarchy.tray")) {
+          finalSec = destBarKey === "bar" ? "right" : "center"
+        }
+        if (!Array.isArray(targetLayout[finalSec])) targetLayout[finalSec] = []
+        targetLayout[finalSec].push(entry)
+      }, true)
+    })
   }
 
   function shiftWidget(barKey, section, index, delta) {
-    mutateShellConfig(function(cfg) {
-      var layout = cfg[barKey].layout
-      var arr = Array.isArray(layout[section]) ? layout[section] : []
-      var targetIdx = index + delta
-      if (index < 0 || index >= arr.length || targetIdx < 0 || targetIdx >= arr.length) return
-      var item = arr[index]
-      arr.splice(index, 1)
-      arr.splice(targetIdx, 0, item)
-      layout[section] = arr
-    }, barKey === "bar")
+    Qt.callLater(function() {
+      mutateShellConfig(function(cfg) {
+        var layout = cfg[barKey].layout
+        var arr = Array.isArray(layout[section]) ? layout[section] : []
+        var targetIdx = index + delta
+        if (index < 0 || index >= arr.length || targetIdx < 0 || targetIdx >= arr.length) return
+        var item = arr[index]
+        arr.splice(index, 1)
+        arr.splice(targetIdx, 0, item)
+        layout[section] = arr
+      }, barKey === "bar")
+    })
   }
 
   function removeWidget(barKey, pluginId) {
     root.pendingRemoveId = ""
-    mutateShellConfig(function(cfg) {
-      popEntryFromLayout(cfg[barKey].layout, pluginId)
-    }, barKey === "bar")
+    Qt.callLater(function() {
+      mutateShellConfig(function(cfg) {
+        popEntryFromLayout(cfg[barKey].layout, pluginId)
+      }, barKey === "bar")
+    })
   }
 
   function setBarEdgeOrSwap(barKey, targetEdgeRaw) {
@@ -280,14 +302,15 @@ PanelWindow {
             text: "󰕮  MC 4Bars — Quad-Edge Status Bar Manager"
             color: Commons.Color.foreground
             font.family: Style.font.family
-            font.pixelSize: Style.font.title
+            font.pixelSize: 16
             font.bold: true
             Layout.fillWidth: true
           }
 
           Rectangle {
-            implicitWidth: toggleEdgeLabel.implicitWidth + 24
+            implicitWidth: toggleEdgeLabel.implicitWidth + 28
             Layout.preferredWidth: implicitWidth
+            Layout.minimumWidth: implicitWidth
             height: 28
             radius: 5
             color: toggleEdgeMouse.containsMouse ? Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.25) : Qt.rgba(1, 1, 1, 0.08)
@@ -300,7 +323,7 @@ PanelWindow {
               text: "Toggle " + root.barEdge(root.activeBarTab)
               color: Commons.Color.foreground
               font.family: Style.font.family
-              font.pixelSize: Style.font.small
+              font.pixelSize: 12
             }
 
             MouseArea {
@@ -313,8 +336,9 @@ PanelWindow {
           }
 
           Rectangle {
-            implicitWidth: toggleAllLabel.implicitWidth + 24
+            implicitWidth: toggleAllLabel.implicitWidth + 28
             Layout.preferredWidth: implicitWidth
+            Layout.minimumWidth: implicitWidth
             height: 28
             radius: 5
             color: toggleAllMouse.containsMouse ? Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.25) : Qt.rgba(1, 1, 1, 0.08)
@@ -327,7 +351,7 @@ PanelWindow {
               text: "Toggle All"
               color: Commons.Color.foreground
               font.family: Style.font.family
-              font.pixelSize: Style.font.small
+              font.pixelSize: 12
             }
 
             MouseArea {
@@ -350,7 +374,7 @@ PanelWindow {
               text: "✕"
               color: Commons.Color.foreground
               font.family: Style.font.family
-              font.pixelSize: Style.font.body
+              font.pixelSize: 13
             }
 
             MouseArea {
@@ -363,17 +387,17 @@ PanelWindow {
           }
         }
 
-        // 4 Bar Tabs
+        // 4 Bar Tabs (Top, Bottom, Left, Right)
         RowLayout {
           Layout.fillWidth: true
           spacing: 8
 
           Repeater {
             model: [
-              { key: "bottomBar", title: "Secondary 1" },
-              { key: "leftBar", title: "Secondary 2" },
-              { key: "rightBar", title: "Secondary 3" },
-              { key: "bar", title: "Primary Bar" }
+              { key: "bar", title: "Top Bar" },
+              { key: "bottomBar", title: "Bottom Bar" },
+              { key: "leftBar", title: "Left Bar" },
+              { key: "rightBar", title: "Right Bar" }
             ]
             delegate: Rectangle {
               required property var modelData
@@ -396,7 +420,7 @@ PanelWindow {
                   text: modelData.title + " [" + currentEdge.toUpperCase() + "]"
                   color: selected ? Commons.Color.background : Commons.Color.foreground
                   font.family: Style.font.family
-                  font.pixelSize: Style.font.small
+                  font.pixelSize: 12
                   font.bold: true
                 }
 
@@ -437,7 +461,7 @@ PanelWindow {
               text: "Edge (Auto-Swaps):"
               color: Commons.Color.foreground
               font.family: Style.font.family
-              font.pixelSize: Style.font.small
+              font.pixelSize: 12
             }
 
             Repeater {
@@ -457,7 +481,7 @@ PanelWindow {
                   text: modelData
                   color: current ? Commons.Color.background : Commons.Color.foreground
                   font.family: Style.font.family
-                  font.pixelSize: Style.font.small
+                  font.pixelSize: 12
                   font.bold: current
                 }
 
@@ -475,7 +499,7 @@ PanelWindow {
               text: "Background:"
               color: Commons.Color.foreground
               font.family: Style.font.family
-              font.pixelSize: Style.font.small
+              font.pixelSize: 12
             }
 
             Repeater {
@@ -495,7 +519,7 @@ PanelWindow {
                   text: modelData
                   color: current ? Commons.Color.background : Commons.Color.foreground
                   font.family: Style.font.family
-                  font.pixelSize: Style.font.small
+                  font.pixelSize: 12
                   font.bold: current
                 }
 
@@ -551,7 +575,7 @@ PanelWindow {
                   text: secCol.colTitle + " (" + secCol.items.length + ")"
                   color: Commons.Color.accent
                   font.family: Style.font.family
-                  font.pixelSize: Style.font.body
+                  font.pixelSize: 13
                   font.bold: true
                 }
 
@@ -586,7 +610,7 @@ PanelWindow {
                           text: wid.indexOf(".") !== -1 ? wid.split(".").pop() : wid
                           color: Commons.Color.foreground
                           font.family: Style.font.family
-                          font.pixelSize: Style.font.small
+                          font.pixelSize: 12
                           font.bold: true
                         }
 

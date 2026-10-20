@@ -66,7 +66,7 @@ Item {
     id: coordinatorConfigFile
     path: root.omarchyConfigDir + "/shell.json"
     watchChanges: true
-    atomicWrites: false
+    atomicWrites: true
     printErrors: false
     onLoaded: root.syncFromDiskConfig()
     onFileChanged: reload()

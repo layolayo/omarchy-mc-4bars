@@ -40,10 +40,10 @@ SYSTEM_PLUGINS_DIR = Path(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy")) 
 SECTIONS = ("left", "center", "right", "tray")
 EDGES = ("top", "bottom", "left", "right")
 BAR_SLOTS = (
-    ("bar", "top", "Primary Bar"),
-    ("bottomBar", "bottom", "Secondary Bar 1"),
-    ("leftBar", "left", "Secondary Bar 2"),
-    ("rightBar", "right", "Secondary Bar 3"),
+    ("bar", "top", "Top Bar"),
+    ("bottomBar", "bottom", "Bottom Bar"),
+    ("leftBar", "left", "Left Bar"),
+    ("rightBar", "right", "Right Bar"),
 )
 SAFE_PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -595,13 +595,13 @@ def run_tui() -> None:
                     "│                                                                                │",
                     "│  NAVIGATION                                                                    │",
                     "│    ↑ / ↓  or  k / j       Move selection highlight up or down across widgets   │",
-                    "│    Tab    or  ← / →       Switch between the 4 Bars (Primary, Bottom, L, R)    │",
+                    "│    Tab    or  ← / →       Switch between the 4 Bars (Top, Bottom, Left, Right) │",
                     "│                                                                                │",
                     "│  MOVE SELECTED WIDGET WITHIN CURRENT BAR (SECTIONS)                            │",
                     "│    1  or  Shift+L / T     Move to L (left)   [or T (top) on vertical bars]     │",
                     "│    2  or  M / m           Move to M (middle)                                   │",
                     "│    3  or  Shift+R / B     Move to R (right)  [or B (bottom) on vertical bars]  │",
-                    "│    4                      Move to Tray (drawer)                                │",
+                    "│    4                      Move to Tray (drawer, when omarchy.tray is on bar)   │",
                     "│    [  or  ]               Reorder selected widget earlier/later in its section │",
                     "│                                                                                │",
                     "│  SEND SELECTED WIDGET TO ANOTHER SCREEN EDGE BAR                               │",
@@ -610,11 +610,13 @@ def run_tui() -> None:
                     "│    l                      Send widget to LEFT bar                              │",
                     "│    r                      Send widget to RIGHT bar                             │",
                     "│                                                                                │",
-                    "│  REMOVE / BAR APPEARANCE / EXIT                                                │",
+                    "│  HIDE / REMOVE / BAR APPEARANCE / EXIT                                         │",
+                    "│    h                      Hide / Show (toggle visibility of) current bar       │",
+                    "│    H (Shift+H)            Hide / Show (toggle visibility of) all secondary bars│",
                     "│    x  or  d  or  Delete   Remove selected widget (asks [y/n] confirmation)     │",
                     "│    g                      Cycle current bar background (none → glassy → opaque)│",
                     "│    o                      Open graphical point-and-click GUI Manager           │",
-                    "│    ?  or  h               Toggle this Instructions & Guide screen              │",
+                    "│    ?                      Toggle this Instructions & Guide screen              │",
                     "│    q  or  Esc             Quit the TUI                                         │",
                     "└────────────────────────────────────────────────────────────────────────────────┘",
                     "",
@@ -688,7 +690,7 @@ def run_tui() -> None:
             sec_hint = (f"1/T:Top 2/M:Mid 3/B:Bot{tray_suffix}"
                         if is_vert else f"1/L:Left 2/M:Mid 3/R:Right{tray_suffix}")
             help_line_1 = "Navigate : Tab/←/→ switch bar | ↑/↓ (j/k) select widget | [/] reorder | ?:Guide | q:Quit"
-            help_line_2 = f"Actions  : {sec_hint} | t/b/l/r:→Top/Bot/Left/Right Bar | x:Remove | g:BG | o:GUI"
+            help_line_2 = f"Actions  : {sec_hint} | t/b/l/r:→Bar | h:Hide/Show Bar | x:Remove | g:BG | o:GUI"
 
             if max_y >= 10:
                 if pending_remove is not None:
@@ -741,9 +743,17 @@ def run_tui() -> None:
 
             if ch in (ord("q"), ord("Q"), 27):
                 break
-            elif ch in (ord("?"), ord("h"), ord("H")):
+            elif ch == ord("?"):
                 show_help = True
                 stdscr.clear()
+            elif ch == ord("h"):
+                call_ipc("toggleEdge", pos, quiet=True)
+                stdscr.clear()
+                status_msg = f"Toggled visibility (hide/show) of {pos.upper()} bar ({slot_key})."
+            elif ch == ord("H"):
+                call_ipc("toggle", quiet=True)
+                stdscr.clear()
+                status_msg = "Toggled visibility (hide/show) of all secondary bars."
             elif ch in (ord("\t"), curses.KEY_RIGHT):
                 bar_idx = (bar_idx + 1) % len(BAR_SLOTS)
                 row_idx = 0

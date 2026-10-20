@@ -142,7 +142,7 @@ Item {
     id: userShellConfigFile
     path: root.omarchyConfigDir + "/shell.json"
     watchChanges: true
-    atomicWrites: false
+    atomicWrites: true
     printErrors: false
     onLoaded: root.reloadBottomBarConfig()
     onLoadFailed: root.reloadBottomBarConfig()
