@@ -14,6 +14,10 @@
   ],
   "keepLoaded": true,
   "barWidget": {
+    "displayName": "MC 4Bars",
+    "description": "Quad-edge status bar layout manager",
+    "category": "System",
+    "allowMultiple": false,
     "defaultSection": "right"
   },
   "entryPoints": {
