@@ -381,8 +381,13 @@ Item {
   }
 
   property bool primaryBarFlagHidden: false
+  property bool primaryAutoHidByFullscreen: false
   property bool primaryFullscreenDesktop: false
   property int primaryHyprFullscreenSerial: 0
+
+  function omarchyBin(name) {
+    return root.omarchyPath ? (root.omarchyPath + "/bin/" + name) : name
+  }
 
   readonly property bool primaryScreenFullscreen: {
     var serial = root.primaryHyprFullscreenSerial
@@ -407,40 +412,49 @@ Item {
     return false
   }
 
-  readonly property bool primaryShouldHide: root.primaryBarFlagHidden || root.primaryFullscreenDesktop || root.primaryScreenFullscreen
+  readonly property bool primaryFullscreenActive: root.primaryFullscreenDesktop || root.primaryScreenFullscreen
 
-  onPrimaryShouldHideChanged: root.applyPrimaryBarHidden()
-  onShellChanged: root.applyPrimaryBarHidden()
+  onPrimaryFullscreenActiveChanged: root.applyPrimaryBarHidden()
 
   function applyPrimaryBarHidden() {
-    var primaryBar = root.shell && root.shell.bar ? root.shell.bar : null
-    if (!primaryBar) return
-    var hide = root.primaryShouldHide
-    if (primaryBar.barHidden !== hide) {
-      primaryBar.barHidden = hide
-    }
-    if (hide) {
-      if (typeof primaryBar.clearTooltip === "function") primaryBar.clearTooltip()
-      if (primaryBar.activePopout && "close" in primaryBar.activePopout) primaryBar.activePopout.close()
+    var fsActive = root.primaryFullscreenActive
+    if (fsActive) {
+      if (!root.primaryBarFlagHidden && !root.primaryAutoHidByFullscreen) {
+        root.primaryAutoHidByFullscreen = true
+        Util.execArgv([root.omarchyBin("omarchy-toggle"), "mc-4bars-auto-bar-off", "on"])
+        Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "on"])
+      } else if (root.primaryAutoHidByFullscreen && !root.primaryBarFlagHidden) {
+        Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "on"])
+      }
+    } else {
+      if (root.primaryAutoHidByFullscreen) {
+        root.primaryAutoHidByFullscreen = false
+        Util.execArgv([root.omarchyBin("omarchy-toggle"), "mc-4bars-auto-bar-off", "off"])
+        Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "off"])
+      }
     }
   }
 
-  Connections {
-    target: root.shell && root.shell.bar ? root.shell.bar : null
-    ignoreUnknownSignals: true
-    function onBarHiddenChanged() {
-      if (root.primaryScreenFullscreen || root.primaryFullscreenDesktop) {
-        root.applyPrimaryBarHidden()
-      }
+  Process {
+    id: primaryAutoHideMarkerProbe
+    running: true
+    command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/mc-4bars-auto-bar-off"]
+    onExited: function(exitCode) {
+      root.primaryAutoHidByFullscreen = (exitCode === 0)
+      root.applyPrimaryBarHidden()
     }
   }
 
   Process {
     id: primaryBarHiddenProbe
     running: true
-    command: ["test", "-f", root.home + "/.local/state/omarchy/toggles/bar-off"]
+    command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/bar-off"]
     onExited: function(exitCode) {
       root.primaryBarFlagHidden = (exitCode === 0)
+      if (!root.primaryFullscreenActive && !root.primaryBarFlagHidden && root.primaryAutoHidByFullscreen) {
+        root.primaryAutoHidByFullscreen = false
+        Util.execArgv([root.omarchyBin("omarchy-toggle"), "mc-4bars-auto-bar-off", "off"])
+      }
       root.applyPrimaryBarHidden()
     }
   }
@@ -448,7 +462,7 @@ Item {
   Process {
     id: primaryFullscreenDesktopProbe
     running: true
-    command: ["test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
+    command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
     onExited: function(exitCode) {
       root.primaryFullscreenDesktop = (exitCode === 0)
       root.applyPrimaryBarHidden()
@@ -481,6 +495,13 @@ Item {
 
   Timer {
     interval: 350
+    running: true
+    repeat: false
+    onTriggered: root.refreshPrimaryFullscreenState()
+  }
+
+  Timer {
+    interval: 1500
     running: true
     repeat: false
     onTriggered: root.refreshPrimaryFullscreenState()
