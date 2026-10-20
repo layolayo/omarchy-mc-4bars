@@ -372,8 +372,137 @@ Item {
   }
 
   function syncAllHiddenStates() {
+    primaryBarHiddenProbe.running = true
+    primaryFullscreenDesktopProbe.running = true
+    root.refreshPrimaryFullscreenState()
     for (var i = 0; i < secondaryBars.length; i++) {
       secondaryBars[i].syncHiddenState()
+    }
+  }
+
+  property bool primaryBarFlagHidden: false
+  property bool primaryFullscreenDesktop: false
+  property int primaryHyprFullscreenSerial: 0
+
+  readonly property bool primaryScreenFullscreen: {
+    var serial = root.primaryHyprFullscreenSerial
+    var screens = Quickshell.screens
+    for (var s = 0; s < screens.length; s++) {
+      var monitor = Hyprland.monitorFor(screens[s])
+      var activeWorkspace = monitor ? monitor.activeWorkspace : null
+      if (!activeWorkspace) continue
+      var wsIpc = activeWorkspace.lastIpcObject
+      if (wsIpc && wsIpc.hasfullscreen) return true
+      var workspaceId = activeWorkspace.id
+      var toplevels = Hyprland.toplevels.values
+      for (var i = 0; i < toplevels.length; i++) {
+        var toplevel = toplevels[i]
+        if (!toplevel || !toplevel.workspace || toplevel.workspace.id !== workspaceId) continue
+        var ipc = toplevel.lastIpcObject
+        var fs = ipc && ipc.fullscreen ? Number(ipc.fullscreen) : 0
+        var fsc = ipc && ipc.fullscreenClient ? Number(ipc.fullscreenClient) : 0
+        if (Math.max(fs, fsc) >= 2) return true
+      }
+    }
+    return false
+  }
+
+  readonly property bool primaryShouldHide: root.primaryBarFlagHidden || root.primaryFullscreenDesktop || root.primaryScreenFullscreen
+
+  onPrimaryShouldHideChanged: root.applyPrimaryBarHidden()
+  onShellChanged: root.applyPrimaryBarHidden()
+
+  function applyPrimaryBarHidden() {
+    var primaryBar = root.shell && root.shell.bar ? root.shell.bar : null
+    if (!primaryBar) return
+    var hide = root.primaryShouldHide
+    if (primaryBar.barHidden !== hide) {
+      primaryBar.barHidden = hide
+    }
+    if (hide) {
+      if (typeof primaryBar.clearTooltip === "function") primaryBar.clearTooltip()
+      if (primaryBar.activePopout && "close" in primaryBar.activePopout) primaryBar.activePopout.close()
+    }
+  }
+
+  Connections {
+    target: root.shell && root.shell.bar ? root.shell.bar : null
+    ignoreUnknownSignals: true
+    function onBarHiddenChanged() {
+      if (root.primaryScreenFullscreen || root.primaryFullscreenDesktop) {
+        root.applyPrimaryBarHidden()
+      }
+    }
+  }
+
+  Process {
+    id: primaryBarHiddenProbe
+    running: true
+    command: ["test", "-f", root.home + "/.local/state/omarchy/toggles/bar-off"]
+    onExited: function(exitCode) {
+      root.primaryBarFlagHidden = (exitCode === 0)
+      root.applyPrimaryBarHidden()
+    }
+  }
+
+  Process {
+    id: primaryFullscreenDesktopProbe
+    running: true
+    command: ["test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
+    onExited: function(exitCode) {
+      root.primaryFullscreenDesktop = (exitCode === 0)
+      root.applyPrimaryBarHidden()
+    }
+  }
+
+  FileView {
+    path: root.home + "/.local/state/omarchy/toggles"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: primaryBarHiddenProbe.running = true
+  }
+
+  FileView {
+    path: root.home + "/.local/state/omarchy/toggles/hypr"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: primaryFullscreenDesktopProbe.running = true
+  }
+
+  Timer {
+    id: primaryHyprFollowupTimer
+    interval: 60
+    repeat: false
+    onTriggered: {
+      root.primaryHyprFullscreenSerial += 1
+      root.applyPrimaryBarHidden()
+    }
+  }
+
+  Timer {
+    interval: 350
+    running: true
+    repeat: false
+    onTriggered: root.refreshPrimaryFullscreenState()
+  }
+
+  function refreshPrimaryFullscreenState() {
+    Hyprland.refreshWorkspaces()
+    Hyprland.refreshToplevels()
+    root.primaryHyprFullscreenSerial += 1
+    root.applyPrimaryBarHidden()
+    primaryHyprFollowupTimer.restart()
+  }
+
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      var name = event ? String(event.name) : ""
+      if (name === "fullscreen" || name === "workspace" || name === "workspacev2" ||
+          name === "focusedmon" || name === "activewindow" || name === "activewindowv2" ||
+          name === "openwindow" || name === "closewindow" || name === "movewindow") {
+        root.refreshPrimaryFullscreenState()
+      }
     }
   }
 
