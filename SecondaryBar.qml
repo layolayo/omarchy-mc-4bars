@@ -1499,7 +1499,6 @@ Item {
     onTriggered: if (!root.targetTooltipHovered(root.tooltipTarget)) root.hideTooltip(root.tooltipTarget)
   }
 
-  property bool fullscreenDesktop: false
   property double lastToggleMs: 0
 
   Process {
@@ -1509,36 +1508,15 @@ Item {
     onExited: function(exitCode) { root.barHidden = (exitCode === 0) }
   }
 
-  Process {
-    id: fullscreenDesktopProbe
-    running: true
-    command: ["test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
-    onExited: function(exitCode) { root.fullscreenDesktop = (exitCode === 0) }
-  }
-
   FileView {
-    path: root.home + "/.local/state/omarchy/toggles/hypr"
+    path: root.home + "/.local/state/omarchy/toggles"
     watchChanges: true
     printErrors: false
-    onFileChanged: fullscreenDesktopProbe.running = true
-  }
-
-  Connections {
-    target: Hyprland
-    function onRawEvent(event) {
-      var name = event ? String(event.name) : ""
-      if (name === "fullscreen" || name === "workspace" || name === "workspacev2" ||
-          name === "focusedmon" || name === "activewindow" || name === "openwindow" ||
-          name === "closewindow" || name === "movewindow") {
-        Hyprland.refreshWorkspaces()
-        Hyprland.refreshToplevels()
-      }
-    }
+    onFileChanged: barHiddenProbe.running = true
   }
 
   function syncHiddenState() {
     barHiddenProbe.running = true
-    fullscreenDesktopProbe.running = true
   }
 
   function toggleBarVisibility() {
@@ -1604,25 +1582,13 @@ Item {
   component BarPanel: PanelWindow {
     id: barWindow
 
-    readonly property var monitor: Hyprland.monitorFor(screen)
-    readonly property var activeWorkspace: monitor ? monitor.activeWorkspace : null
-    readonly property int workspaceId: activeWorkspace ? activeWorkspace.id : -1
-    readonly property int fullscreenMode: {
-      var mode = 0
-      var toplevels = Hyprland.toplevels.values
-      for (var i = 0; i < toplevels.length; i++) {
-        var toplevel = toplevels[i]
-        if (!toplevel || !toplevel.workspace || toplevel.workspace.id !== workspaceId) continue
-        var ipc = toplevel.lastIpcObject
-        mode = Math.max(mode, ipc && ipc.fullscreen ? Number(ipc.fullscreen) : 0)
-      }
-      return mode
-    }
-    readonly property bool screenFullscreen: fullscreenMode >= 2
-    readonly property bool effectiveHidden: root.barHidden || root.fullscreenDesktop || screenFullscreen
+    readonly property bool effectiveHidden: root.barHidden
+
+    Region { id: emptyInputMask }
 
     visible: !remapGuard.remapping && (cutoutWaitOver || !cutoutPending)
     exclusionMode: effectiveHidden ? ExclusionMode.Ignore : ExclusionMode.Auto
+    mask: effectiveHidden ? emptyInputMask : null
 
     ScreenMoveRemap {
       id: remapGuard
