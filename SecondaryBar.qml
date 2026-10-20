@@ -1518,15 +1518,15 @@ Item {
 
   Process {
     id: barHiddenProbe
-    running: true
     command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/" + root.toggleFlag]
+    running: true
     onExited: function(exitCode) { root.barHidden = (exitCode === 0) }
   }
 
   Process {
     id: fullscreenDesktopProbe
-    running: true
     command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
+    running: true
     onExited: function(exitCode) { root.fullscreenDesktop = (exitCode === 0) }
   }
 
@@ -1641,21 +1641,18 @@ Item {
 
     readonly property var monitor: Hyprland.monitorFor(screen)
     readonly property var activeWorkspace: monitor ? monitor.activeWorkspace : null
-    onActiveWorkspaceChanged: root.refreshHyprFullscreenState()
+    onActiveWorkspaceChanged: Qt.callLater(root.refreshHyprFullscreenState)
     readonly property int workspaceId: activeWorkspace ? activeWorkspace.id : -1
     readonly property int fullscreenMode: {
       var serial = root.hyprFullscreenSerial
       var mode = 0
-      var wsIpc = activeWorkspace ? activeWorkspace.lastIpcObject : null
-      if (wsIpc && wsIpc.hasfullscreen) mode = 2
       var toplevels = Hyprland.toplevels.values
       for (var i = 0; i < toplevels.length; i++) {
         var toplevel = toplevels[i]
         if (!toplevel || !toplevel.workspace || toplevel.workspace.id !== workspaceId) continue
         var ipc = toplevel.lastIpcObject
         var fs = ipc && ipc.fullscreen ? Number(ipc.fullscreen) : 0
-        var fsc = ipc && ipc.fullscreenClient ? Number(ipc.fullscreenClient) : 0
-        mode = Math.max(mode, fs, fsc)
+        mode = Math.max(mode, fs)
       }
       return mode
     }

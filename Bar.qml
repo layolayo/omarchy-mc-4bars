@@ -372,6 +372,7 @@ Item {
   }
 
   function syncAllHiddenStates() {
+    primaryAutoHideMarkerProbe.running = true
     primaryBarHiddenProbe.running = true
     primaryFullscreenDesktopProbe.running = true
     root.refreshPrimaryFullscreenState()
@@ -396,8 +397,6 @@ Item {
       var monitor = Hyprland.monitorFor(screens[s])
       var activeWorkspace = monitor ? monitor.activeWorkspace : null
       if (!activeWorkspace) continue
-      var wsIpc = activeWorkspace.lastIpcObject
-      if (wsIpc && wsIpc.hasfullscreen) return true
       var workspaceId = activeWorkspace.id
       var toplevels = Hyprland.toplevels.values
       for (var i = 0; i < toplevels.length; i++) {
@@ -405,8 +404,7 @@ Item {
         if (!toplevel || !toplevel.workspace || toplevel.workspace.id !== workspaceId) continue
         var ipc = toplevel.lastIpcObject
         var fs = ipc && ipc.fullscreen ? Number(ipc.fullscreen) : 0
-        var fsc = ipc && ipc.fullscreenClient ? Number(ipc.fullscreenClient) : 0
-        if (Math.max(fs, fsc) >= 2) return true
+        if (fs >= 2) return true
       }
     }
     return false
@@ -437,8 +435,8 @@ Item {
 
   Process {
     id: primaryAutoHideMarkerProbe
-    running: true
     command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/mc-4bars-auto-bar-off"]
+    running: true
     onExited: function(exitCode) {
       root.primaryAutoHidByFullscreen = (exitCode === 0)
       root.applyPrimaryBarHidden()
@@ -447,8 +445,8 @@ Item {
 
   Process {
     id: primaryBarHiddenProbe
-    running: true
     command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/bar-off"]
+    running: true
     onExited: function(exitCode) {
       root.primaryBarFlagHidden = (exitCode === 0)
       if (!root.primaryFullscreenActive && !root.primaryBarFlagHidden && root.primaryAutoHidByFullscreen) {
@@ -461,8 +459,8 @@ Item {
 
   Process {
     id: primaryFullscreenDesktopProbe
-    running: true
     command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
+    running: true
     onExited: function(exitCode) {
       root.primaryFullscreenDesktop = (exitCode === 0)
       root.applyPrimaryBarHidden()
@@ -473,7 +471,10 @@ Item {
     path: root.home + "/.local/state/omarchy/toggles"
     watchChanges: true
     printErrors: false
-    onFileChanged: primaryBarHiddenProbe.running = true
+    onFileChanged: {
+      primaryAutoHideMarkerProbe.running = true
+      primaryBarHiddenProbe.running = true
+    }
   }
 
   FileView {
@@ -497,7 +498,11 @@ Item {
     interval: 350
     running: true
     repeat: false
-    onTriggered: root.refreshPrimaryFullscreenState()
+    onTriggered: {
+      primaryAutoHideMarkerProbe.running = true
+      primaryBarHiddenProbe.running = true
+      root.refreshPrimaryFullscreenState()
+    }
   }
 
   Timer {
