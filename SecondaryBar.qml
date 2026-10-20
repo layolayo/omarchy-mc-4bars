@@ -35,6 +35,10 @@ Item {
   property string home: Quickshell.env("HOME")
   property string stateHome: home + "/.local/state"
   property string omarchyConfigDir: home + "/.config/omarchy"
+
+  function omarchyBin(name) {
+    return root.omarchyPath ? (root.omarchyPath + "/bin/" + name) : name
+  }
   readonly property var fallbackBarConfig: ({
     position: root.defaultPosition,
     background: "none",
@@ -371,7 +375,7 @@ Item {
       panel.open(safePayload)
       return true
     }
-    Quickshell.execDetached(["omarchy-shell", "shell", "summon", key, safePayload])
+    Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "shell", "summon", key, safePayload])
     return true
   }
 
@@ -384,7 +388,7 @@ Item {
       panel.close()
       return true
     }
-    Quickshell.execDetached(["omarchy-shell", "shell", "hide", key])
+    Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "shell", "hide", key])
     return true
   }
 
@@ -409,7 +413,7 @@ Item {
         ? root.hideLocalPlugin(key)
         : root.summonLocalPlugin(key, safePayload)
     }
-    Quickshell.execDetached(["omarchy-shell", "shell", "toggle", key, safePayload])
+    Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "shell", "toggle", key, safePayload])
     return true
   }
 
@@ -589,7 +593,8 @@ Item {
         return String(requestedId || "") === String(moduleName || "")
           ? root.moduleWidgets(moduleName) : []
       },
-      _run: function(command) { root.run(command) },
+      _run: String(key || "").indexOf("omarchy.") === 0
+        ? function(command) { root.run(command) } : null,
       _setCenterHoverRevealSuppressed: function(value) {
         root.centerHoverRevealSuppressed = !!value
       }
@@ -1398,13 +1403,21 @@ Item {
     if (!requestedTransparent || transparentForegroundProc.running) return
 
     transparentForegroundProc.command = [
-      "omarchy-bar-text-color",
+      root.omarchyBin("omarchy-bar-text-color"),
       root.position,
       String(root.barSize),
       colorHex(root.themeForeground),
       colorHex(root.themeContrastForeground)
     ]
     transparentForegroundProc.running = true
+    transparentForegroundDeadline.restart()
+  }
+
+  Timer {
+    id: transparentForegroundDeadline
+    interval: 2500
+    repeat: false
+    onTriggered: if (transparentForegroundProc.running) transparentForegroundProc.running = false
   }
 
   onRequestedTransparentChanged: scheduleTransparentForegroundRefresh()
@@ -1506,14 +1519,14 @@ Item {
   Process {
     id: barHiddenProbe
     running: true
-    command: ["test", "-f", root.home + "/.local/state/omarchy/toggles/" + root.toggleFlag]
+    command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/" + root.toggleFlag]
     onExited: function(exitCode) { root.barHidden = (exitCode === 0) }
   }
 
   Process {
     id: fullscreenDesktopProbe
     running: true
-    command: ["test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
+    command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
     onExited: function(exitCode) { root.fullscreenDesktop = (exitCode === 0) }
   }
 
@@ -1570,21 +1583,21 @@ Item {
     }
     root.lastToggleMs = now
     root.barHidden = !root.barHidden
-    Util.execArgv(["omarchy-toggle", root.toggleFlag, root.barHidden ? "on" : "off"])
+    Util.execArgv([root.omarchyBin("omarchy-toggle"), root.toggleFlag, root.barHidden ? "on" : "off"])
     return root.barHidden ? "hidden" : "visible"
   }
 
   function showBar() {
     root.lastToggleMs = Date.now()
     root.barHidden = false
-    Util.execArgv(["omarchy-toggle", root.toggleFlag, "off"])
+    Util.execArgv([root.omarchyBin("omarchy-toggle"), root.toggleFlag, "off"])
     return "visible"
   }
 
   function hideBar() {
     root.lastToggleMs = Date.now()
     root.barHidden = true
-    Util.execArgv(["omarchy-toggle", root.toggleFlag, "on"])
+    Util.execArgv([root.omarchyBin("omarchy-toggle"), root.toggleFlag, "on"])
     return "hidden"
   }
 

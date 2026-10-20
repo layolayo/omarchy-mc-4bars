@@ -14,10 +14,22 @@ PanelWindow {
   property var service: null
   property var shell: null
   property var manifest: null
+  property string omarchyPath: Quickshell.env("OMARCHY_PATH")
   property bool opened: visible
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string shellJsonPath: home + "/.config/omarchy/shell.json"
+
+  function omarchyBin(name) {
+    return root.omarchyPath ? (root.omarchyPath + "/bin/" + name) : name
+  }
+
+  function launchTui() {
+    var rawUrl = String(Qt.resolvedUrl("bin/omarchy-mc-4bars"))
+    var tuiPath = rawUrl.indexOf("file://") === 0 ? decodeURIComponent(rawUrl.slice(7)) : rawUrl
+    root.close()
+    Quickshell.execDetached([root.omarchyBin("omarchy-launch-floating-terminal-with-presentation"), "/usr/bin/python3", tuiPath, "tui"])
+  }
 
   property var shellConfig: ({})
   property string activeBarTab: "bar" // "bar" (Top) | "bottomBar" (Bottom) | "leftBar" (Left) | "rightBar" (Right)
@@ -117,10 +129,10 @@ PanelWindow {
       if (root.service && typeof root.service.reloadAllBars === "function") {
         root.service.reloadAllBars()
       } else {
-        Quickshell.execDetached(["omarchy-shell", "-q", "io.github.layolayo.mc-4bars", "reloadConfig"])
+        Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "-q", "io.github.layolayo.mc-4bars", "reloadConfig"])
       }
       if (rescanPrimaryBar) {
-        Quickshell.execDetached(["omarchy-shell", "-q", "shell", "reloadConfig"])
+        Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "-q", "shell", "reloadConfig"])
       }
     } catch (e) {
       console.warn("io.github.layolayo.mc-4bars: ManagerPanel failed to save shell.json:", e)
@@ -300,11 +312,41 @@ PanelWindow {
 
           Text {
             text: "󰕮  MC 4Bars — Quad-Edge Status Bar Manager"
+            textFormat: Text.PlainText
             color: Commons.Color.foreground
             font.family: Style.font.family
             font.pixelSize: 16
             font.bold: true
             Layout.fillWidth: true
+          }
+
+          Rectangle {
+            implicitWidth: tuiBtnLabel.implicitWidth + 24
+            Layout.preferredWidth: implicitWidth
+            Layout.minimumWidth: implicitWidth
+            height: 28
+            radius: 5
+            color: tuiBtnMouse.containsMouse ? Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.25) : Qt.rgba(1, 1, 1, 0.08)
+            border.width: 1
+            border.color: Commons.Color.accent
+
+            Text {
+              id: tuiBtnLabel
+              anchors.centerIn: parent
+              text: "Open TUI"
+              textFormat: Text.PlainText
+              color: Commons.Color.foreground
+              font.family: Style.font.family
+              font.pixelSize: 12
+            }
+
+            MouseArea {
+              id: tuiBtnMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.launchTui()
+            }
           }
 
           Rectangle {
@@ -321,6 +363,7 @@ PanelWindow {
               id: toggleEdgeLabel
               anchors.centerIn: parent
               text: "Toggle " + root.barEdge(root.activeBarTab)
+              textFormat: Text.PlainText
               color: Commons.Color.foreground
               font.family: Style.font.family
               font.pixelSize: 12
@@ -331,7 +374,13 @@ PanelWindow {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: Quickshell.execDetached(["omarchy-shell", "io.github.layolayo.mc-4bars", "toggleEdge", root.barEdge(root.activeBarTab)])
+              onClicked: {
+                if (root.service && typeof root.service.toggleEdgeVisibility === "function") {
+                  root.service.toggleEdgeVisibility(root.barEdge(root.activeBarTab))
+                } else {
+                  Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "io.github.layolayo.mc-4bars", "toggleEdge", root.barEdge(root.activeBarTab)])
+                }
+              }
             }
           }
 
@@ -349,6 +398,7 @@ PanelWindow {
               id: toggleAllLabel
               anchors.centerIn: parent
               text: "Toggle All"
+              textFormat: Text.PlainText
               color: Commons.Color.foreground
               font.family: Style.font.family
               font.pixelSize: 12
@@ -359,7 +409,13 @@ PanelWindow {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: Quickshell.execDetached(["omarchy-shell", "io.github.layolayo.mc-4bars", "toggle"])
+              onClicked: {
+                if (root.service && typeof root.service.toggleAllSecondaryBars === "function") {
+                  root.service.toggleAllSecondaryBars()
+                } else {
+                  Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "io.github.layolayo.mc-4bars", "toggle"])
+                }
+              }
             }
           }
 
@@ -372,6 +428,7 @@ PanelWindow {
             Text {
               anchors.centerIn: parent
               text: "✕"
+              textFormat: Text.PlainText
               color: Commons.Color.foreground
               font.family: Style.font.family
               font.pixelSize: 13
@@ -418,6 +475,7 @@ PanelWindow {
                 Text {
                   Layout.alignment: Qt.AlignHCenter
                   text: modelData.title + " [" + currentEdge.toUpperCase() + "]"
+                  textFormat: Text.PlainText
                   color: selected ? Commons.Color.background : Commons.Color.foreground
                   font.family: Style.font.family
                   font.pixelSize: 12
@@ -427,6 +485,7 @@ PanelWindow {
                 Text {
                   Layout.alignment: Qt.AlignHCenter
                   text: count > 0 ? (count + (count === 1 ? " widget (active)" : " widgets (active)")) : "0 widgets (dormant)"
+                  textFormat: Text.PlainText
                   color: selected ? Commons.Color.background : Qt.rgba(Commons.Color.foreground.r, Commons.Color.foreground.g, Commons.Color.foreground.b, 0.7)
                   font.family: Style.font.family
                   font.pixelSize: 10
@@ -459,6 +518,7 @@ PanelWindow {
 
             Text {
               text: "Edge (Auto-Swaps):"
+              textFormat: Text.PlainText
               color: Commons.Color.foreground
               font.family: Style.font.family
               font.pixelSize: 12
@@ -479,6 +539,7 @@ PanelWindow {
                   id: edgeBtnLabel
                   anchors.centerIn: parent
                   text: modelData
+                  textFormat: Text.PlainText
                   color: current ? Commons.Color.background : Commons.Color.foreground
                   font.family: Style.font.family
                   font.pixelSize: 12
@@ -497,6 +558,7 @@ PanelWindow {
 
             Text {
               text: "Background:"
+              textFormat: Text.PlainText
               color: Commons.Color.foreground
               font.family: Style.font.family
               font.pixelSize: 12
@@ -517,6 +579,7 @@ PanelWindow {
                   id: bgBtnLabel
                   anchors.centerIn: parent
                   text: modelData
+                  textFormat: Text.PlainText
                   color: current ? Commons.Color.background : Commons.Color.foreground
                   font.family: Style.font.family
                   font.pixelSize: 12
@@ -573,6 +636,7 @@ PanelWindow {
 
                 Text {
                   text: secCol.colTitle + " (" + secCol.items.length + ")"
+                  textFormat: Text.PlainText
                   color: Commons.Color.accent
                   font.family: Style.font.family
                   font.pixelSize: 13
@@ -608,6 +672,7 @@ PanelWindow {
 
                         Text {
                           text: wid.indexOf(".") !== -1 ? wid.split(".").pop() : wid
+                          textFormat: Text.PlainText
                           color: Commons.Color.foreground
                           font.family: Style.font.family
                           font.pixelSize: 12
@@ -617,6 +682,7 @@ PanelWindow {
                         Text {
                           visible: wid.indexOf(".") !== -1 && !confirmingDelete
                           text: wid
+                          textFormat: Text.PlainText
                           color: Qt.rgba(Commons.Color.foreground.r, Commons.Color.foreground.g, Commons.Color.foreground.b, 0.55)
                           font.family: Style.font.family
                           font.pixelSize: 10
@@ -639,7 +705,7 @@ PanelWindow {
                             height: 16
                             radius: 3
                             color: delBtnMouse.containsMouse ? Qt.rgba(Commons.Color.urgent.r, Commons.Color.urgent.g, Commons.Color.urgent.b, 0.35) : Qt.rgba(1, 1, 1, 0.1)
-                            Text { anchors.centerIn: parent; text: "✕"; color: Commons.Color.foreground; font.pixelSize: 9 }
+                            Text { anchors.centerIn: parent; text: "✕"; textFormat: Text.PlainText; color: Commons.Color.foreground; font.pixelSize: 9 }
                             MouseArea {
                               id: delBtnMouse
                               anchors.fill: parent
@@ -659,6 +725,7 @@ PanelWindow {
                               id: confirmYesText
                               anchors.centerIn: parent
                               text: "Remove?"
+                              textFormat: Text.PlainText
                               color: Commons.Color.background
                               font.family: Style.font.family
                               font.pixelSize: 9
@@ -681,6 +748,7 @@ PanelWindow {
                               id: confirmNoText
                               anchors.centerIn: parent
                               text: "Cancel"
+                              textFormat: Text.PlainText
                               color: Commons.Color.foreground
                               font.family: Style.font.family
                               font.pixelSize: 9
@@ -718,6 +786,7 @@ PanelWindow {
                             Text {
                               anchors.centerIn: parent
                               text: columnsRow.isVerticalBar ? modelData.lV : modelData.lH
+                              textFormat: Text.PlainText
                               color: activeSec ? Commons.Color.background : Commons.Color.foreground
                               font.family: Style.font.family
                               font.pixelSize: 10
@@ -742,6 +811,7 @@ PanelWindow {
                           Text {
                             anchors.centerIn: parent
                             text: columnsRow.isVerticalBar ? "↑" : "←"
+                            textFormat: Text.PlainText
                             color: Commons.Color.foreground
                             font.pixelSize: 10
                           }
@@ -756,6 +826,7 @@ PanelWindow {
                           Text {
                             anchors.centerIn: parent
                             text: columnsRow.isVerticalBar ? "↓" : "→"
+                            textFormat: Text.PlainText
                             color: Commons.Color.foreground
                             font.pixelSize: 10
                           }
@@ -780,6 +851,7 @@ PanelWindow {
                             Text {
                               anchors.centerIn: parent
                               text: modelData.label
+                              textFormat: Text.PlainText
                               color: Commons.Color.foreground
                               font.family: Style.font.family
                               font.pixelSize: 9

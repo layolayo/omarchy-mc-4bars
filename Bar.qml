@@ -122,7 +122,7 @@ Item {
     id: hostReloadTimer
     interval: 80
     repeat: false
-    onTriggered: Util.execArgv(["omarchy-shell", "-q", "shell", "reloadConfig"])
+    onTriggered: Util.execArgv([root.omarchyBin("omarchy-shell"), "-q", "shell", "reloadConfig"])
   }
 
   function readCurrentConfig() {
@@ -297,7 +297,7 @@ Item {
       return sbar.toggleBarVisibility()
     }
     if (root.lastPrimaryEdge === edge || edge === "top") {
-      Util.execArgv(["omarchy-toggle-bar", "toggle"])
+      Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "toggle"])
       return "toggled-primary"
     }
     return "empty"
@@ -308,7 +308,7 @@ Item {
     var sbar = secondaryBarAtEdge(edge)
     if (sbar) return sbar.showBar()
     if (root.lastPrimaryEdge === edge || edge === "top") {
-      Util.execArgv(["omarchy-toggle-bar", "off"])
+      Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "off"])
       return "visible"
     }
     return "empty"
@@ -319,7 +319,7 @@ Item {
     var sbar = secondaryBarAtEdge(edge)
     if (sbar) return sbar.hideBar()
     if (root.lastPrimaryEdge === edge || edge === "top") {
-      Util.execArgv(["omarchy-toggle-bar", "on"])
+      Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "on"])
       return "hidden"
     }
     return "empty"

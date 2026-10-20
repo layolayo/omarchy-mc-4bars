@@ -1,247 +1,191 @@
-# Omarchy MC 4Bars (`io.github.layolayo.mc-4bars`)
+# MC 4Bars (`io.github.layolayo.mc-4bars`)
 
-A native Quad-Edge Status Bar plugin for **Omarchy / Quickshell** (`omarchy-shell`) that extends Omarchy's primary status bar (`config.bar`) with up to **three additional independent status bars** (`bottomBar`, `leftBar`, `rightBar`) across all four screen edges (`top`, `bottom`, `left`, `right`).
+Quad-edge status bar system for Omarchy Quattro Shell. Host independent status bars across **Top**, **Bottom**, **Left**, and **Right** screen edges with lazy surface instantiation, warm off-screen parking, vertical orientation adaptation, automatic fullscreen hiding, and both a graphical layout manager (GUI) and an interactive terminal user interface (TUI).
 
----
+![MC 4Bars GUI Manager](assets/gui.png)
 
-## Key Features
-
-- **Quad-Edge Status Bar Architecture (`top`, `bottom`, `left`, `right`)**:
-  - Hosts any installed Omarchy bar widget across `bar` (Primary), `bottomBar` (Secondary 1), `leftBar` (Secondary 2), and `rightBar` (Secondary 3), each with its own **Left (`L`)**, **Middle / Centre (`M`)**, and **Right (`R`)** sections.
-- **Lazy Instantiation + Warm Off-Screen Parking**:
-  - **Empty Bars (`0` widgets)**: Remain completely **dormant** (`Variants { model: [] }`) and allocate **zero** Wayland `wlr-layer-shell` surfaces or GPU buffers until you move at least one widget onto them.
-  - **Populated Bars (`≥ 1` widget)**: Use upstream Omarchy's **warm off-screen parking** (`ExclusionMode.Ignore`, negative edge margins, transparent background, and hidden inner loader) when toggled off or hidden by fullscreen windows, guaranteeing instantaneous (`~0 ms`) show/hide transitions without Wayland surface remap glitches.
-- **Automatic Edge Swapping**:
-  - Moving any bar onto a screen edge that is already occupied by another bar (by dragging the bar's empty space, clicking an edge in the Visual Layout Manager, or running `omarchy mc-4bars position` / `swap`) **automatically swaps** the two bars' edges in `~/.config/omarchy/shell.json`.
-- **Automatic Fullscreen & Fullscreen-Desktop Hiding**:
-  - Automatically hides secondary bars on any monitor where the active workspace enters native fullscreen (`SPACE + F`) or Omarchy fullscreen-desktop (`SUPER + F` / `window-no-gaps.lua`), and restores them as soon as you exit fullscreen or switch workspaces.
-- **Visual 4-Bar Layout Manager (`ManagerPanel.qml`)**:
-  - Built-in graphical overlay panel (`omarchy mc-4bars manager`) to inspect active/dormant bar status, move or reorder widgets across all 4 bars and `L`/`M`/`R` sections, swap screen edges, and switch background styles (`none`, `glassy`, `opaque`).
+![MC 4Bars Terminal User Interface](assets/tui.png)
 
 ---
 
-## Keyboard Shortcuts (Hyprland)
+## Features
 
-Configured in `~/.config/hypr/bindings.lua`:
+- **4 Independent Screen Edges**: Run widgets on the **Top** (`bar`), **Bottom** (`bottomBar`), **Left** (`leftBar`), and **Right** (`rightBar`) screen edges simultaneously.
+- **Lazy Instantiation & Warm Off-Screen Parking**: Empty bars consume zero Wayland layer surfaces. Populated bars park warmly off-screen (`exclusiveZone: 0`) when hidden so toggling is instantaneous without destroying widget state.
+- **4 Sections per Bar (`L` / `M` / `R` + `Tray`)**: Place any first-party (`omarchy.*`) or third-party bar widget into Left/Top (`L`/`T`), Middle (`M`), Right/Bottom (`R`/`B`), or the expandable `Tray` drawer on any bar.
+- **Vertical Bar Adaptation**: Left and Right edge bars automatically adapt horizontal widgets and rotate multi-character text labels by 90 degrees so clocks, workspace indicators, and plugin badges remain readable along vertical edges without clipping.
+- **Per-Bar Visibility & Fullscreen Auto-Conceal**:
+  - Toggle any individual bar (`top`, `bottom`, `left`, `right`) or all secondary bars at once from the GUI, TUI, CLI, or IPC.
+  - **Fullscreen Auto-Conceal**: Automatically parks both the primary Top Bar and all active secondary bars off-screen whenever a window enters fullscreen on that monitor, preventing input bleed-through into fullscreen applications and games, and restores your previous bar visibility state upon exiting fullscreen.
+- **Dual Management Interfaces**:
+  - **Graphical Layout Manager (`ManagerPanel.qml`)**: Drag-and-drop or click-to-assign widgets across all 4 bars, reorder sections, cycle bar backgrounds (`none`, `glassy`, `opaque`), toggle installed plugins, and hide/show individual edges.
+  - **Interactive Curses TUI & CLI (`bin/omarchy-mc-4bars`)**: Launchable directly from the GUI header (**Open TUI** button), right-clicking the bar icon, or running from any terminal.
 
-| Keybinding | Action |
+---
+
+## Requirements
+
+- **Omarchy** with the **Quattro Shell** (`omarchy-shell` / `quickshell`).
+- **Python 3** (`/usr/bin/python3`, standard library `curses` module) for the TUI and CLI helper.
+- Recommended companion tool: [`omarchy-toggle`](https://github.com/layolayo/omarchy-toggle) for enabling/disabling third-party plugins directly from the manager.
+
+---
+
+## Installation
+
+### Via Omarchy Plugin CLI (Recommended)
+
+```bash
+omarchy plugin add https://github.com/layolayo/omarchy-mc-4bars.git --enable
+```
+
+Or using `omarchy-shell` directly:
+
+```bash
+omarchy-shell plugin install https://github.com/layolayo/omarchy-mc-4bars
+```
+
+### Optional: Add CLI / TUI to `$PATH`
+
+The GUI panel (**Open TUI** button) and bar widget right-click action automatically resolve `bin/omarchy-mc-4bars` inside the installed plugin directory, so no manual `$PATH` setup is needed for graphical use. To run `omarchy-mc-4bars` directly from any terminal shell:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf ~/.config/omarchy/plugins/io.github.layolayo.mc-4bars/bin/omarchy-mc-4bars ~/.local/bin/omarchy-mc-4bars
+```
+
+---
+
+## Usage
+
+### 1. Bar Widget (`BarWidget.qml`)
+
+When placed on a bar, the MC 4Bars icon button supports three mouse actions:
+- **Left-click**: Open or close the graphical **MC 4Bars Layout Manager** (`ManagerPanel.qml`).
+- **Middle-click**: Toggle visibility (hide/show) of all secondary bars at once.
+- **Right-click**: Launch the interactive `omarchy-mc-4bars tui` in a floating terminal window.
+
+### 2. Graphical Layout Manager (`ManagerPanel.qml`)
+
+Open the graphical manager by clicking the bar widget or running:
+
+```bash
+omarchy-shell shell toggle io.github.layolayo.mc-4bars "{}"
+```
+
+From the GUI you can:
+- **Show / Hide Any Bar**: Use the header buttons (`Toggle Top`, `Toggle Bottom`, `Toggle Left`, `Toggle Right`, and `Toggle All`) to hide or show bars immediately.
+- **Move & Reorder Widgets**: Drag widgets or use the section controls to move items between `Top`, `Bottom`, `Left`, and `Right` bars and across sections (`L`/`T`, `M`, `R`/`B`, `Tray`).
+- **Cycle Bar Backgrounds**: Switch any bar between `none` (transparent), `glassy`, and `opaque`.
+- **Open TUI**: Click **Open TUI** in the top-right header to open the interactive curses terminal interface.
+
+### 3. Interactive TUI (`omarchy-mc-4bars tui`)
+
+Launch the TUI from the GUI **Open TUI** button, by right-clicking the bar icon, or from a terminal:
+
+```bash
+~/.config/omarchy/plugins/io.github.layolayo.mc-4bars/bin/omarchy-mc-4bars tui
+```
+
+#### TUI Keyboard Shortcuts
+
+| Key | Action |
 | :--- | :--- |
-| **`SUPER + SPACE`** | Toggle the primary bar (`omarchy-toggle-bar`) |
-| **`SHIFT + SUPER + ALT`** *(modifier chord)* | Toggle all populated secondary bars (`bottomBar`, `leftBar`, `rightBar`) |
-| **`SUPER + SHIFT + ALT + SPACE`** | Toggle all populated secondary bars (explicit key fallback) |
-| **`SUPER + CTRL + ALT + UP`** | Toggle whichever bar is currently on the **top** edge |
-| **`SUPER + CTRL + ALT + DOWN`** | Toggle whichever bar is currently on the **bottom** edge |
-| **`SUPER + CTRL + ALT + LEFT`** | Toggle whichever bar is currently on the **left** edge |
-| **`SUPER + CTRL + ALT + RIGHT`** | Toggle whichever bar is currently on the **right** edge |
+| `Tab` or `Left` / `Right` | Switch active bar tab (`Top` → `Bottom` → `Left` → `Right`) |
+| `Up` / `Down` or `j` / `k` | Select widget on the current bar |
+| `1` / `2` / `3` / `4` | Move selected widget to section `1` (`L`/`T`), `2` (`M`), `3` (`R`/`B`), or `4` (`Tray`) |
+| `L` / `M` / `R` (or `T` / `M` / `B`) | Move selected widget to Left/Top, Middle, or Right/Bottom section on the current bar |
+| `t` / `b` / `l` / `r` | Send selected widget to the `Top`, `Bottom`, `Left`, or `Right` bar |
+| `[` / `]` | Reorder selected widget earlier (`[`) or later (`]`) within its current section |
+| `h` | Toggle visibility (hide/show) of the currently viewed bar (`Top`, `Bottom`, `Left`, or `Right`) |
+| `H` | Toggle visibility (hide/show) of all secondary bars at once |
+| `g` | Cycle background style (`none` → `glassy` → `opaque`) for the current bar |
+| `x` / `d` / `Del` / `Backspace` | Remove selected widget from the bar (prompts `y`/`n` to confirm) |
+| `o` | Open the graphical MC 4Bars Layout Manager (`ManagerPanel.qml`) |
+| `?` | Toggle the built-in interactive help screen |
+| `q` or `Esc` | Quit the TUI |
 
----
+### 4. CLI Subcommands & IPC
 
-## Visual Layout Manager (`ManagerPanel.qml`)
-
-Open the interactive Quad-Edge Layout Manager from your terminal:
+`omarchy-mc-4bars` provides full CLI subcommands for scripting and Hyprland keybindings:
 
 ```bash
-omarchy mc-4bars manager
+# Display all 4 bars and their current widget layouts
+omarchy-mc-4bars list
+
+# Open the interactive TUI or graphical manager
+omarchy-mc-4bars tui
+omarchy-mc-4bars gui
+
+# Move a widget to a specific bar and section (L, M, R, T, B, or tray)
+omarchy-mc-4bars top omarchy.workspaces L
+omarchy-mc-4bars bottom omarchy.clock M
+omarchy-mc-4bars left io.github.layolayo.mc-4bars B
+omarchy-mc-4bars move omarchy.system-NowPlaying bottom R --before omarchy.tray
+
+# Hide, show, or toggle a specific bar edge (top, bottom, left, right) or all secondary bars
+omarchy-mc-4bars toggle bottom
+omarchy-mc-4bars toggle top
+omarchy-mc-4bars hide left
+omarchy-mc-4bars show left
+omarchy-mc-4bars toggle
+
+# Swap the entire widget layout of two edges
+omarchy-mc-4bars swap top bottom
+
+# Change bar background style (none, glassy, opaque, cycle)
+omarchy-mc-4bars background glassy bottom
+
+# Remove a widget from whichever bar it is on (-y skips confirmation)
+omarchy-mc-4bars remove io.github.layolayo.mc-4bars -y
+
+# Clean any uninstalled/invalid widget entries across all 4 bars
+omarchy-mc-4bars clean
 ```
 
-Or click the **MC 4Bars** (`󰕮`) icon if you add `"io.github.layolayo.mc-4bars"` to a bar layout.
-
-Inside the Visual Layout Manager you can:
-1. Switch between **Secondary 1 (`bottomBar`)**, **Secondary 2 (`leftBar`)**, **Secondary 3 (`rightBar`)**, and **Primary Bar (`bar`)** tabs (each tab displays its current screen edge and whether it is `active` or `dormant`).
-2. Click **`top`**, **`bottom`**, **`left`**, or **`right`** under **Edge (Auto-Swaps)** to move the selected bar to that edge and automatically swap with any bar already on that edge.
-3. Click **`none`**, **`glassy`**, or **`opaque`** to change the selected bar's background style.
-4. Click **`L`**, **`M`**, or **`R`** on any widget card to move it between sections on the current bar, **`↑`** / **`↓`** to reorder it within a section, or **`→Top`** / **`→Bot`** / **`→Left`** / **`→Right`** to send it directly to another bar.
-
----
-
-## Command-Line Interface (`CLI`) Reference
-
-The CLI is installed at `~/.local/bin/omarchy-mc-4bars` (with backward-compatible aliases `omarchy mc-4bars`, `omarchy bottom-bar`, and `omarchy-bottom-bar`).
-
-### 1. Inspect Bar Status & Layouts
+Direct IPC targets via `omarchy-shell`:
 
 ```bash
-omarchy mc-4bars
-# or
-omarchy mc-4bars list
-```
-
-Displays all 4 bar slots (`bar`, `bottomBar`, `leftBar`, `rightBar`), their assigned screen edge, background mode, active/dormant status, and widgets in `L (left)`, `M (center)`, and `R (right)`.
-
----
-
-### 2. Move Widgets Between Any of the 4 Bars (`top`, `bottom`, `left`, `right`)
-
-Horizontal bars (`top`, `bottom`) use **`L`** (Left), **`M`** (Middle/Centre), **`R`** (Right).
-Vertical bars (`left`, `right`) use **`T`** (Top), **`M`** (Middle/Centre), **`B`** (Bottom).
-
-```bash
-# Move 'voxtype' to the bottom bar's Middle/Centre (M) section:
-omarchy mc-4bars bottom voxtype M
-
-# Move 'omarchygotchi' and 'omagames' to the left vertical bar's Top (T) section:
-omarchy mc-4bars left omarchygotchi T
-omarchy mc-4bars left omagames T
-
-# Move 'weather' to the right vertical bar's Bottom (B) section:
-omarchy mc-4bars right weather B
-
-# Return 'voxtype' to the top bar's Right (R) section:
-omarchy mc-4bars top voxtype R
-```
-
-You can also use `move <plugin-id> [edge-or-slot] <L|M|R|T|B>` with ordering flags (`--before <id>`, `--after <id>`, `--index <n>`):
-
-```bash
-omarchy mc-4bars move voxtype bottom M
-omarchy mc-4bars move tailscale left T --index 0
-omarchy mc-4bars move bluetooth top R --before audio
-```
-
-*(Note: When a widget is moved to any bar, the CLI automatically removes it from whichever bar previously held it so it is never duplicated).*
-
----
-
-### 3. Swap Two Screen Edges (`swap` & `position`)
-
-Swap the bars on any two screen edges (`top`, `bottom`, `left`, `right`):
-
-```bash
-# Swap the top bar and the bottom bar:
-omarchy mc-4bars swap top bottom
-
-# Swap the bottom bar and the left bar:
-omarchy mc-4bars swap bottom left
-```
-
-Or assign a bar to a specific edge (automatically swapping with any bar already on that edge):
-
-```bash
-# Move bottomBar to 'left' (and swap leftBar to bottomBar's previous edge):
-omarchy mc-4bars position left
-
-# Move leftBar to 'top' (and swap the primary bar to leftBar's previous edge):
-omarchy mc-4bars position top leftBar
-```
-
-You can also **drag any secondary bar's empty space** with the mouse to another edge of the screen to trigger an immediate live edge swap!
-
----
-
-### 4. Show, Hide, or Toggle Bars (Global or Per-Edge)
-
-```bash
-# Toggle all populated secondary bars:
-omarchy mc-4bars toggle
-
-# Toggle only the bar on a specific screen edge:
-omarchy mc-4bars toggle bottom
-omarchy mc-4bars toggle left
-omarchy mc-4bars toggle right
-omarchy mc-4bars toggle top
-
-# Explicitly show or hide all secondary bars (or a specific edge):
-omarchy mc-4bars show [top|bottom|left|right]
-omarchy mc-4bars hide [top|bottom|left|right]
-```
-
----
-
-### 5. Change Bar Background Style (`none`, `glassy`, `opaque`, `cycle`)
-
-```bash
-# Set background on bottomBar (default):
-omarchy mc-4bars background glassy
-
-# Set background on a specific edge or slot:
-omarchy mc-4bars background opaque left
-omarchy mc-4bars background cycle rightBar
-```
-
----
-
-### 6. Open a Widget's Panel or Remove a Widget
-
-```bash
-# Toggle a hosted plugin's popup/panel:
-omarchy mc-4bars open voxtype
-
-# Remove a widget from any secondary bar:
-omarchy mc-4bars remove voxtype
-```
-
----
-
-## Direct Quickshell IPC Targets
-
-`Bar.qml` registers the primary `ShellIpc` target `io.github.layolayo.mc-4bars` (plus backward-compatible aliases `io.github.layolayo.mc-2bars` and `matthew.bottom-bar`):
-
-```bash
+omarchy-shell shell toggle io.github.layolayo.mc-4bars "{}"
 omarchy-shell io.github.layolayo.mc-4bars toggle
-omarchy-shell io.github.layolayo.mc-4bars show
-omarchy-shell io.github.layolayo.mc-4bars hide
 omarchy-shell io.github.layolayo.mc-4bars toggleEdge bottom
-omarchy-shell io.github.layolayo.mc-4bars toggleEdge left
-omarchy-shell io.github.layolayo.mc-4bars toggleEdge right
-omarchy-shell io.github.layolayo.mc-4bars toggleEdge top
-omarchy-shell io.github.layolayo.mc-4bars swapEdges top bottom
+omarchy-shell io.github.layolayo.mc-4bars hideEdge left
+omarchy-shell io.github.layolayo.mc-4bars showEdge left
 omarchy-shell io.github.layolayo.mc-4bars reloadConfig
-omarchy-shell io.github.layolayo.mc-4bars togglePlugin <plugin-id>
 ```
 
 ---
 
-## Configuration Schema (`~/.config/omarchy/shell.json`)
+## Configuration & State Storage
 
-All four bar slots share the same configuration structure in `~/.config/omarchy/shell.json`:
+- **Bar Layouts**: Stored in `~/.config/omarchy/shell.json` across the `bar` (Top), `bottomBar` (Bottom), `leftBar` (Left), and `rightBar` (Right) objects (`position`, `background`, `autoHide`, and `layout.{left,center,right,tray}`).
+- **Visibility State Files**: Synchronised with `~/.local/state/omarchy/toggles/bar-off` (primary Top Bar) and `~/.local/state/omarchy/toggles/mc-4bars-auto-bar-off` (automatic fullscreen conceal state).
 
-```json
-{
-  "version": 1,
-  "bar": {
-    "position": "top",
-    "background": "none",
-    "layout": {
-      "left": [{ "id": "workspaces" }],
-      "center": [{ "id": "clock" }],
-      "right": [{ "id": "tray" }, { "id": "battery" }]
-    }
-  },
-  "bottomBar": {
-    "position": "bottom",
-    "background": "none",
-    "layout": {
-      "left": [],
-      "center": [{ "id": "voxtype" }],
-      "right": []
-    }
-  },
-  "leftBar": {
-    "position": "left",
-    "background": "none",
-    "layout": {
-      "left": [],
-      "center": [],
-      "right": []
-    }
-  },
-  "rightBar": {
-    "position": "right",
-    "background": "none",
-    "layout": {
-      "left": [],
-      "center": [],
-      "right": []
-    }
-  },
-  "plugins": [
-    { "id": "io.github.layolayo.mc-4bars" }
-  ]
-}
+---
+
+## Security & Hardening
+
+- **Zero Network Access**: All configuration, state inspection, and IPC operations execute locally.
+- **Explicit Binary Path Resolution**: Subprocess invocations in QML and Python resolve Omarchy utilities through `$OMARCHY_PATH/bin` (`~/.local/share/omarchy/bin`) and system binaries via `/usr/bin/...` without `/bin/sh -c` shell interpolation.
+- **Plain-Text Label Enforcement**: Dynamic labels in `ManagerPanel.qml` use `textFormat: Text.PlainText` to prevent Qt `AutoText` HTML or remote-image injection from third-party plugin manifests.
+- **Bounded File & IPC Reads**: `bin/omarchy-mc-4bars` enforces strict byte caps on `shell.json` (1 MiB), `manifest.json` (64 KiB, ignoring symlinks), and IPC output (256 KiB), with 2.0-second subprocess timeouts and atomic temporary-file writes (`0600` permissions).
+
+---
+
+## Uninstallation
+
+```bash
+omarchy plugin remove io.github.layolayo.mc-4bars
+```
+
+If you created the optional symlink in `~/.local/bin`:
+
+```bash
+rm -f ~/.local/bin/omarchy-mc-4bars
 ```
 
 ---
 
 ## Licence
 
-MIT Licence — Copyright (c) 2026 Matthew (`layolayo`).
+Released under the [MIT Licence](LICENSE).
