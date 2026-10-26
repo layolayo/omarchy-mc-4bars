@@ -62,14 +62,57 @@ Item {
     manifest: root.manifest
   }
 
+  readonly property string helperBinPath: {
+    var rawUrl = String(Qt.resolvedUrl("bin/omarchy-mc-4bars"))
+    return rawUrl.indexOf("file://") === 0 ? decodeURIComponent(rawUrl.slice(7)) : rawUrl
+  }
+  property string queuedWritePayload: ""
+  property bool queuedReloadHost: false
+
   FileView {
     id: coordinatorConfigFile
     path: root.omarchyConfigDir + "/shell.json"
     watchChanges: true
-    atomicWrites: true
     printErrors: false
     onLoaded: root.syncFromDiskConfig()
     onFileChanged: reload()
+  }
+
+  Process {
+    id: configWriterProc
+    property string payload: ""
+    property bool reloadHost: false
+    stdinEnabled: true
+    onStarted: {
+      write(payload)
+      stdinEnabled = false
+    }
+    onExited: function() {
+      root.suppressSwapWatch = false
+      if (root.queuedWritePayload !== "") {
+        var nextPayload = root.queuedWritePayload
+        var nextReload = root.queuedReloadHost
+        root.queuedWritePayload = ""
+        root.queuedReloadHost = false
+        root.dispatchConfigWrite(nextPayload, nextReload)
+      }
+    }
+  }
+
+  function dispatchConfigWrite(payloadText, reloadHostShell) {
+    if (!payloadText) return
+    if (configWriterProc.running) {
+      root.queuedWritePayload = payloadText
+      root.queuedReloadHost = root.queuedReloadHost || !!reloadHostShell
+      return
+    }
+    root.suppressSwapWatch = true
+    var subcmd = reloadHostShell ? "write-stdin-reload-host" : "write-stdin"
+    configWriterProc.payload = payloadText
+    configWriterProc.reloadHost = !!reloadHostShell
+    configWriterProc.command = ["/usr/bin/python3", root.helperBinPath, subcmd]
+    configWriterProc.stdinEnabled = true
+    configWriterProc.running = true
   }
 
   function defaultPositionFor(slotKey) {
@@ -154,13 +197,8 @@ Item {
     config.version = 1
     root.cachedConfig = JSON.parse(JSON.stringify(config))
     root.lastPrimaryEdge = BarModel.normalizePosition((config.bar && config.bar.position) || "top")
-    root.suppressSwapWatch = true
     applyConfigToSecondaryBars(config)
-    coordinatorConfigFile.setText(JSON.stringify(config, null, 2) + "\n")
-    root.suppressSwapWatch = false
-    if (reloadHostShell) {
-      hostReloadTimer.restart()
-    }
+    root.dispatchConfigWrite(JSON.stringify(config, null, 2) + "\n", reloadHostShell)
   }
 
   function syncFromDiskConfig() {

@@ -19,16 +19,20 @@ PanelWindow {
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string shellJsonPath: home + "/.config/omarchy/shell.json"
+  readonly property string helperBinPath: {
+    var rawUrl = String(Qt.resolvedUrl("bin/omarchy-mc-4bars"))
+    return rawUrl.indexOf("file://") === 0 ? decodeURIComponent(rawUrl.slice(7)) : rawUrl
+  }
+  property string queuedWritePayload: ""
+  property bool queuedRescanPrimary: false
 
   function omarchyBin(name) {
     return root.omarchyPath ? (root.omarchyPath + "/bin/" + name) : name
   }
 
   function launchTui() {
-    var rawUrl = String(Qt.resolvedUrl("bin/omarchy-mc-4bars"))
-    var tuiPath = rawUrl.indexOf("file://") === 0 ? decodeURIComponent(rawUrl.slice(7)) : rawUrl
     root.close()
-    Quickshell.execDetached([root.omarchyBin("omarchy-launch-floating-terminal-with-presentation"), "/usr/bin/python3", tuiPath, "tui"])
+    Quickshell.execDetached([root.omarchyBin("omarchy-launch-floating-terminal-with-presentation"), "/usr/bin/python3", root.helperBinPath, "tui"])
   }
 
   property var shellConfig: ({})
@@ -60,10 +64,42 @@ PanelWindow {
     id: shellConfigFile
     path: root.shellJsonPath
     watchChanges: true
-    atomicWrites: true
     printErrors: false
     onLoaded: root.parseConfig()
     onFileChanged: reload()
+  }
+
+  Process {
+    id: panelConfigWriterProc
+    property string payload: ""
+    stdinEnabled: true
+    onStarted: {
+      write(payload)
+      stdinEnabled = false
+    }
+    onExited: function() {
+      if (root.queuedWritePayload !== "") {
+        var nextPayload = root.queuedWritePayload
+        var nextRescan = root.queuedRescanPrimary
+        root.queuedWritePayload = ""
+        root.queuedRescanPrimary = false
+        root.dispatchPanelConfigWrite(nextPayload, nextRescan)
+      }
+    }
+  }
+
+  function dispatchPanelConfigWrite(payloadText, rescanPrimaryBar) {
+    if (!payloadText) return
+    if (panelConfigWriterProc.running) {
+      root.queuedWritePayload = payloadText
+      root.queuedRescanPrimary = root.queuedRescanPrimary || !!rescanPrimaryBar
+      return
+    }
+    var subcmd = rescanPrimaryBar ? "write-stdin-reload-all" : "write-stdin-reload-secondary"
+    panelConfigWriterProc.payload = payloadText
+    panelConfigWriterProc.command = ["/usr/bin/python3", root.helperBinPath, subcmd]
+    panelConfigWriterProc.stdinEnabled = true
+    panelConfigWriterProc.running = true
   }
 
   function defaultPositionFor(slotKey) {
@@ -125,14 +161,10 @@ PanelWindow {
       mutator(cfg)
       cfg.version = 1
       root.shellConfig = cfg
-      shellConfigFile.setText(JSON.stringify(cfg, null, 2) + "\n")
-      if (root.service && typeof root.service.reloadAllBars === "function") {
-        root.service.reloadAllBars()
+      if (root.service && typeof root.service.persistAndApplyConfig === "function") {
+        root.service.persistAndApplyConfig(cfg, rescanPrimaryBar)
       } else {
-        Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "-q", "io.github.layolayo.mc-4bars", "reloadConfig"])
-      }
-      if (rescanPrimaryBar) {
-        Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "-q", "shell", "reloadConfig"])
+        root.dispatchPanelConfigWrite(JSON.stringify(cfg, null, 2) + "\n", rescanPrimaryBar)
       }
     } catch (e) {
       console.warn("io.github.layolayo.mc-4bars: ManagerPanel failed to save shell.json:", e)

@@ -123,15 +123,14 @@ Item {
   readonly property var pluginObjectOwners: new Map()
   property bool pluginBarApiSyncQueued: false
 
-  // Local manifest, service, and panel hosting for plugins placed on the bottom bar
+  // Local manifest, service, and panel hosting for plugins placed on the secondary bar.
+  // Third-party services and panels are instantiated with parent = null and receive
+  // per-plugin capability-scoped shell/bar facades so plugins cannot traverse the
+  // QObject parent hierarchy or access another plugin's live service/settings.
   readonly property var _localManifestCache: new Map()
   property var _localServices: ({})
   property var _localPanels: ({})
-
-  Item {
-    id: localServiceHost
-    visible: false
-  }
+  property var _localShellFacades: ({})
 
   Component {
     id: manifestReaderComponent
@@ -146,7 +145,6 @@ Item {
     id: userShellConfigFile
     path: root.omarchyConfigDir + "/shell.json"
     watchChanges: true
-    atomicWrites: true
     printErrors: false
     onLoaded: root.reloadBottomBarConfig()
     onLoadFailed: root.reloadBottomBarConfig()
@@ -188,28 +186,7 @@ Item {
     if (root.controller && typeof root.controller.mutateBarSlot === "function") {
       return root.controller.mutateBarSlot(root.barKey, mutator)
     }
-    var raw = String(userShellConfigFile.text() || "").trim()
-    var config = { version: 1 }
-    if (raw) {
-      try {
-        var parsed = JSON.parse(raw)
-        if (Util.isPlainObject(parsed)) config = parsed
-      } catch (e) {
-        console.warn("io.github.layolayo.mc-4bars: cannot mutate malformed shell.json:", e)
-        return false
-      }
-    }
-    if (!Util.isPlainObject(config[root.barKey])) {
-      config[root.barKey] = JSON.parse(JSON.stringify(fallbackBarConfig))
-    }
-    if (!Util.isPlainObject(config[root.barKey].layout)) {
-      config[root.barKey].layout = { left: [], center: [], right: [] }
-    }
-    mutator(config[root.barKey])
-    config.version = 1
-    root.barConfig = JSON.parse(JSON.stringify(config[root.barKey]))
-    userShellConfigFile.setText(JSON.stringify(config, null, 2) + "\n")
-    return true
+    return false
   }
 
   function updateBottomBarEntryInline(moduleName, settings) {
@@ -245,10 +222,20 @@ Item {
     }
   }
 
+  function cloneManifestSnapshot(manifest) {
+    if (!manifest) return null
+    var copy = JSON.parse(JSON.stringify(manifest))
+    delete copy.__isFirstParty
+    delete copy.__hostCapabilities
+    return copy
+  }
+
   function localManifestFor(pluginId) {
     var id = root.canonicalWidgetId(String(pluginId || ""))
     if (!BarModel.isSafePluginId(id) || id.indexOf("omarchy.") === 0) return null
-    if (root._localManifestCache.has(id)) return root._localManifestCache.get(id)
+    if (root._localManifestCache.has(id)) {
+      return root.cloneManifestSnapshot(root._localManifestCache.get(id))
+    }
     var dir = root.omarchyConfigDir + "/plugins/" + id
     var reader = manifestReaderComponent.createObject(null, { path: dir + "/manifest.json" })
     if (!reader) return null
@@ -262,39 +249,158 @@ Item {
       if (!Util.isPlainObject(parsed.entryPoints)) return null
       for (var epKey in parsed.entryPoints) {
         if (!BarModel.isSafeEntryPoint(parsed.entryPoints[epKey])) {
-          console.warn("io.github.layolayo.mc-2bars: rejected unsafe entryPoint '" + epKey + "' in " + id)
+          console.warn("io.github.layolayo.mc-4bars: rejected unsafe entryPoint '" + epKey + "' in " + id)
           return null
         }
       }
+      delete parsed.__isFirstParty
+      delete parsed.__hostCapabilities
       parsed.__sourceDir = dir
       root._localManifestCache.set(id, parsed)
-      return parsed
+      return root.cloneManifestSnapshot(parsed)
     } catch (e) {
-      console.warn("io.github.layolayo.mc-2bars: bad manifest for " + id + ":", e)
+      console.warn("io.github.layolayo.mc-4bars: bad manifest for " + id + ":", e)
       return null
     }
+  }
+
+  function pluginCloneMaySummon(manifest, requestedId) {
+    var metadata = manifest && Util.isPlainObject(manifest.omarchy) ? manifest.omarchy : null
+    var sourceId = metadata ? String(metadata.clonedFrom || "") : ""
+    var allowed = {
+      "omarchy.audio": ["omarchy.osd"],
+      "omarchy.media": ["omarchy.osd"],
+      "omarchy.monitor": ["omarchy.osd"],
+      "omarchy.network": ["omarchy.speedtest", "omarchy.wifiqr"]
+    }
+    var targets = allowed[sourceId] || []
+    return targets.indexOf(String(requestedId || "")) !== -1
+  }
+
+  Component {
+    id: scopedLocalShellComponent
+
+    QtObject {
+      id: facade
+      required property string ownerPluginId
+      property var _serviceLookup: null
+      property var _firstPartyServiceLookup: null
+      property var _summon: null
+      property var _hide: null
+      property var _toggle: null
+      property var _isOpen: null
+      property var _updateSettings: null
+
+      function serviceFor(requestedId) {
+        return _serviceLookup ? _serviceLookup(String(requestedId || "")) : null
+      }
+
+      function firstPartyServiceFor(requestedId) {
+        return _firstPartyServiceLookup ? _firstPartyServiceLookup(String(requestedId || "")) : null
+      }
+
+      function summon(requestedId, payloadJson) {
+        return _summon ? _summon(String(requestedId || ""), String(payloadJson || "")) : false
+      }
+
+      function hide(requestedId) {
+        return _hide ? _hide(String(requestedId || "")) : false
+      }
+
+      function toggle(requestedId, payloadJson) {
+        return _toggle ? _toggle(String(requestedId || ""), String(payloadJson || "")) : false
+      }
+
+      function isOpen(requestedId) {
+        return _isOpen ? _isOpen(String(requestedId || "")) : false
+      }
+
+      function isPluginOpen(requestedId) {
+        return _isOpen ? _isOpen(String(requestedId || "")) : false
+      }
+
+      function updateSettings(requestedId, settings) {
+        return _updateSettings ? _updateSettings(String(requestedId || ""), settings) : false
+      }
+
+      function updateEntryInline(requestedId, settings) {
+        return _updateSettings ? _updateSettings(String(requestedId || ""), settings) : false
+      }
+    }
+  }
+
+  function localShellFacadeFor(ownerPluginId) {
+    var ownerKey = root.canonicalWidgetId(String(ownerPluginId || ""))
+    if (!BarModel.isSafePluginId(ownerKey)) return null
+    if (root._localShellFacades[ownerKey]) return root._localShellFacades[ownerKey]
+
+    function owns(requestedId) {
+      return root.canonicalWidgetId(String(requestedId || "")) === ownerKey
+    }
+
+    var facade = scopedLocalShellComponent.createObject(null, {
+      ownerPluginId: ownerKey,
+      _serviceLookup: function(requestedId) {
+        if (!owns(requestedId)) return null
+        if (ownerKey === "io.github.layolayo.mc-4bars") return root.controller
+        return root._localServices[ownerKey] || null
+      },
+      _firstPartyServiceLookup: function(requestedId) {
+        if (owns(requestedId)) return root._localServices[ownerKey] || null
+        if (root.shell && typeof root.shell.firstPartyServiceFor === "function") {
+          return root.shell.firstPartyServiceFor(requestedId)
+        }
+        return null
+      },
+      _summon: function(requestedId, payloadJson) {
+        var targetKey = root.canonicalWidgetId(String(requestedId || ""))
+        if (owns(targetKey)) {
+          return root.summonLocalPlugin(ownerKey, payloadJson)
+        }
+        if (root.pluginCloneMaySummon(root.localManifestFor(ownerKey), targetKey)) {
+          return root.summonLocalPlugin(targetKey, "{}")
+        }
+        return false
+      },
+      _hide: function(requestedId) {
+        return owns(requestedId) ? root.hideLocalPlugin(ownerKey) : false
+      },
+      _toggle: function(requestedId, payloadJson) {
+        return owns(requestedId) ? root.toggleLocalPlugin(ownerKey, payloadJson) : false
+      },
+      _isOpen: function(requestedId) {
+        return owns(requestedId) ? root.isLocalPluginOpen(ownerKey) : false
+      },
+      _updateSettings: function(requestedId, settings) {
+        return owns(requestedId) ? root.updateBottomBarEntryInline(ownerKey, settings) : false
+      }
+    })
+    if (!facade) return null
+    var next = ({})
+    for (var fk in root._localShellFacades) next[fk] = root._localShellFacades[fk]
+    next[ownerKey] = facade
+    root._localShellFacades = next
+    return facade
   }
 
   function ensureLocalService(pluginId, manifest) {
     var key = root.canonicalWidgetId(String(pluginId || ""))
     if (!BarModel.isSafePluginId(key) || key.indexOf("omarchy.") === 0) return null
     if (root._localServices[key]) return root._localServices[key]
-    var m = manifest || root.localManifestFor(key)
+    var m = manifest ? root.cloneManifestSnapshot(manifest) : root.localManifestFor(key)
     if (!m || !m.entryPoints || !BarModel.isSafeEntryPoint(m.entryPoints.service)) return null
     var url = Util.fileUrl(m.__sourceDir + "/" + m.entryPoints.service)
     var comp = Qt.createComponent(url, Component.PreferSynchronous)
     function finalize() {
       if (comp.status !== Component.Ready) {
-        console.warn("io.github.layolayo.mc-2bars: service load failed for " + key + ": " + comp.errorString())
+        console.warn("io.github.layolayo.mc-4bars: service load failed for " + key + ": " + comp.errorString())
         return
       }
-      var inst = comp.createObject(localServiceHost)
+      var inst = comp.createObject(null)
       if (!inst) return
       if ("omarchyPath" in inst) inst.omarchyPath = root.omarchyPath
-      if ("shell" in inst) inst.shell = localShellFacade
-      if ("manifest" in inst) inst.manifest = m
-      if ("barWidgetRegistry" in inst) inst.barWidgetRegistry = root.barWidgetRegistry
-      if ("pluginRegistry" in inst) inst.pluginRegistry = root.pluginRegistry
+      if ("shell" in inst) inst.shell = root.localShellFacadeFor(key)
+      if ("manifest" in inst) inst.manifest = root.cloneManifestSnapshot(m)
       var next = ({})
       for (var sk in root._localServices) next[sk] = root._localServices[sk]
       next[key] = inst
@@ -346,17 +452,16 @@ Item {
     var url = Util.fileUrl(m.__sourceDir + "/" + m.entryPoints.panel)
     var comp = Qt.createComponent(url, Component.PreferSynchronous)
     if (comp.status !== Component.Ready) {
-      console.warn("io.github.layolayo.mc-2bars: panel load failed for " + key + ": " + comp.errorString())
+      console.warn("io.github.layolayo.mc-4bars: panel load failed for " + key + ": " + comp.errorString())
       return null
     }
-    var inst = comp.createObject(localServiceHost)
+    var inst = comp.createObject(null)
     if (!inst) return null
+    var panelApiId = "bar-entry:" + key
     if ("omarchyPath" in inst) inst.omarchyPath = root.omarchyPath
-    if ("bar" in inst) inst.bar = root
-    if ("shell" in inst) inst.shell = localShellFacade
-    if ("manifest" in inst) inst.manifest = m
-    if ("barWidgetRegistry" in inst) inst.barWidgetRegistry = root.barWidgetRegistry
-    if ("pluginRegistry" in inst) inst.pluginRegistry = root.pluginRegistry
+    if ("bar" in inst) inst.bar = root.pluginBarApiFor(panelApiId, key, false, false)
+    if ("shell" in inst) inst.shell = root.localShellFacadeFor(key)
+    if ("manifest" in inst) inst.manifest = root.cloneManifestSnapshot(m)
     if ("service" in inst) inst.service = root._localServices[key] || root.ensureLocalService(key, m)
     var next = ({})
     for (var pk in root._localPanels) next[pk] = root._localPanels[pk]
@@ -375,7 +480,10 @@ Item {
       panel.open(safePayload)
       return true
     }
-    Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "shell", "summon", key, safePayload])
+    if (key === "io.github.layolayo.mc-4bars" && root.shell && typeof root.shell.summon === "function") {
+      return root.shell.summon(key, "{}")
+    }
+    Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "shell", "summon", key, "{}"])
     return true
   }
 
@@ -387,6 +495,9 @@ Item {
     if (panel && typeof panel.close === "function") {
       panel.close()
       return true
+    }
+    if (key === "io.github.layolayo.mc-4bars" && root.shell && typeof root.shell.hide === "function") {
+      return root.shell.hide(key)
     }
     Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "shell", "hide", key])
     return true
@@ -413,44 +524,11 @@ Item {
         ? root.hideLocalPlugin(key)
         : root.summonLocalPlugin(key, safePayload)
     }
-    Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "shell", "toggle", key, safePayload])
+    if (key === "io.github.layolayo.mc-4bars" && root.shell && typeof root.shell.toggle === "function") {
+      return root.shell.toggle(key, "{}")
+    }
+    Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "shell", "toggle", key, "{}"])
     return true
-  }
-
-  QtObject {
-    id: localShellFacade
-
-    function serviceFor(requestedId) {
-      var key = root.canonicalWidgetId(String(requestedId || ""))
-      return root._localServices[key] || null
-    }
-
-    function firstPartyServiceFor(requestedId) {
-      if (root.shell && typeof root.shell.firstPartyServiceFor === "function") {
-        return root.shell.firstPartyServiceFor(requestedId)
-      }
-      return null
-    }
-
-    function summon(requestedId, payloadJson) {
-      return root.summonLocalPlugin(requestedId, payloadJson)
-    }
-
-    function hide(requestedId) {
-      return root.hideLocalPlugin(requestedId)
-    }
-
-    function toggle(requestedId, payloadJson) {
-      return root.toggleLocalPlugin(requestedId, payloadJson)
-    }
-
-    function isOpen(requestedId) {
-      return root.isLocalPluginOpen(requestedId)
-    }
-
-    function updateSettings(requestedId, settings) {
-      return root.updateBottomBarEntryInline(requestedId, settings)
-    }
   }
 
   Component {
@@ -568,19 +646,21 @@ Item {
     root.syncPluginBarApiObjects(pluginBarApis[String(pluginId || "")])
   }
 
-  function pluginBarApiFor(pluginId, moduleName, registered) {
+  function pluginBarApiFor(pluginId, moduleName, registered, firstParty) {
     var key = String(pluginId || "")
     if (!key) return null
+    var ownerId = String(moduleName || key)
+    var scopedShell = root.localShellFacadeFor(ownerId)
 
     if (pluginBarApis[key]) {
-      pluginBarApis[key].shell = localShellFacade
+      pluginBarApis[key].shell = scopedShell
       return pluginBarApis[key]
     }
 
     var api = pluginBarApiComponent.createObject(null, {
       pluginId: key,
       moduleName: String(moduleName || ""),
-      shell: localShellFacade,
+      shell: scopedShell,
       _showTooltip: function(target, text) { root.showTooltip(target, text) },
       _hideTooltip: function(target) { root.hideTooltip(target) },
       _registerClickTarget: function(target) { root.registerPluginClickTarget(key, target) },
@@ -593,7 +673,7 @@ Item {
         return String(requestedId || "") === String(moduleName || "")
           ? root.moduleWidgets(moduleName) : []
       },
-      _run: String(key || "").indexOf("omarchy.") === 0
+      _run: firstParty === true
         ? function(command) { root.run(command) } : null,
       _setCenterHoverRevealSuppressed: function(value) {
         root.centerHoverRevealSuppressed = !!value
@@ -654,6 +734,11 @@ Item {
         pluginBarApis[id].destroy()
     }
     pluginBarApis = ({})
+    for (var fid in root._localShellFacades) {
+      if (root._localShellFacades[fid] && typeof root._localShellFacades[fid].destroy === "function")
+        root._localShellFacades[fid].destroy()
+    }
+    root._localShellFacades = ({})
     for (var sid in root._localServices) {
       if (root._localServices[sid] && typeof root._localServices[sid].destroy === "function")
         root._localServices[sid].destroy()
@@ -2500,7 +2585,13 @@ Item {
     function injectProps() {
       var target = activeItem
       if (!target) return
-      if ("bar" in target) target.bar = root.pluginBarApiFor(pluginApiId, moduleName, registered)
+      if ("bar" in target) target.bar = root.pluginBarApiFor(pluginApiId, moduleName, registered, firstParty)
+      if ("shell" in target && !registered) target.shell = root.localShellFacadeFor(moduleName)
+      if ("service" in target && !registered) {
+        target.service = moduleName === "io.github.layolayo.mc-4bars"
+          ? root.controller
+          : (root._localServices[root.canonicalWidgetId(moduleName)] || null)
+      }
       if ("moduleName" in target) target.moduleName = moduleName
       if ("settings" in target) target.settings = moduleSettings
     }

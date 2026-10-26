@@ -25,9 +25,8 @@ Quad-edge status bar system for Omarchy Quattro Shell. Host independent status b
 
 ## Requirements
 
-- **Omarchy** with the **Quattro Shell** (`omarchy-shell` / `quickshell`).
+- **Omarchy** with the **Quattro Shell** (`omarchy-shell` / `quickshell` and built-in `omarchy-toggle` / `omarchy-toggle-bar` utilities).
 - **Python 3** (`/usr/bin/python3`, standard library `curses` module) for the TUI and CLI helper.
-- Recommended companion tool: [`omarchy-toggle`](https://github.com/layolayo/omarchy-toggle) for enabling/disabling third-party plugins directly from the manager.
 
 ---
 
@@ -166,9 +165,11 @@ omarchy-shell io.github.layolayo.mc-4bars reloadConfig
 ## Security & Hardening
 
 - **Zero Network Access**: All configuration, state inspection, and IPC operations execute locally.
-- **Explicit Binary Path Resolution**: Subprocess invocations in QML and Python resolve Omarchy utilities through `$OMARCHY_PATH/bin` (`~/.local/share/omarchy/bin`) and system binaries via `/usr/bin/...` without `/bin/sh -c` shell interpolation.
+- **Per-Plugin Capability & QObject Isolation**: Secondary bars instantiate third-party services and panels with `parent = null` and inject per-plugin capability-scoped `PluginBarApi` and shell facades (`localShellFacadeFor`), preventing cross-plugin service/settings access or QObject parent-tree traversal.
+- **Zero Command-Line Payload Exposure**: QML configuration updates pipe JSON over `stdin` (`Quickshell.Io.Process` with `stdinEnabled: true`) into `bin/omarchy-mc-4bars`, and IPC summon/toggle fallbacks never pass dynamic plugin payloads in child process command-line arguments.
+- **Explicit Binary Path Resolution**: Subprocess invocations in QML and Python resolve Omarchy utilities through `$OMARCHY_PATH/bin` (`/usr/share/omarchy/bin`) and system binaries via `/usr/bin/...` without `/bin/sh -c` shell interpolation.
 - **Plain-Text Label Enforcement**: Dynamic labels in `ManagerPanel.qml` use `textFormat: Text.PlainText` to prevent Qt `AutoText` HTML or remote-image injection from third-party plugin manifests.
-- **Bounded File & IPC Reads**: `bin/omarchy-mc-4bars` enforces strict byte caps on `shell.json` (1 MiB), `manifest.json` (64 KiB, ignoring symlinks), and IPC output (256 KiB), with 2.0-second subprocess timeouts and atomic temporary-file writes (`0600` permissions).
+- **Bounded File & IPC Reads with Atomic `0600` Writes**: `bin/omarchy-mc-4bars` enforces strict byte caps on `shell.json` (1 MiB), `manifest.json` (64 KiB, ignoring symlinks), and IPC output (256 KiB), with 2.0-second subprocess timeouts and atomic temporary-file writes (`tempfile.mkstemp` + `os.fchmod(fd, 0o600)` + `os.replace`).
 
 ---
 

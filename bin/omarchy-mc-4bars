@@ -338,10 +338,23 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     parent = SHELL_JSON.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    with SHELL_JSON.open("w", encoding="utf-8") as fh:
-        json.dump(cfg, fh, indent=2)
-        fh.write("\n")
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, tmp_path = tempfile.mkstemp(prefix=".shell.json.", suffix=".tmp", dir=str(parent))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(cfg, fh, indent=2)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, SHELL_JSON)
+        os.chmod(SHELL_JSON, 0o600)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def ensure_all_bars(cfg: dict) -> None:
@@ -992,6 +1005,32 @@ def main() -> None:
     sub = args[0].lower()
     if sub in ("-h", "--help", "help"):
         print(__doc__.strip())
+        return
+
+    if sub in ("write-stdin", "write-stdin-reload-host", "write-stdin-reload-secondary", "write-stdin-reload-all"):
+        raw = sys.stdin.read(1048577)
+        if not raw or len(raw) > 1048576:
+            sys.exit("Invalid or oversized configuration payload on stdin.")
+        try:
+            data = json.loads(raw)
+        except Exception as exc:
+            sys.exit(f"Malformed JSON on stdin: {exc}")
+        if not isinstance(data, dict):
+            sys.exit("Configuration root must be a JSON object.")
+        ensure_all_bars(data)
+        data["version"] = 1
+        save_config(data)
+        if sub in ("write-stdin-reload-secondary", "write-stdin-reload-all"):
+            call_ipc("reloadConfig", quiet=True)
+        if sub in ("write-stdin-reload-host", "write-stdin-reload-all"):
+            subprocess.run(
+                [omarchy_bin("omarchy-shell"), "-q", "shell", "reloadConfig"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2.0,
+                check=False,
+            )
         return
 
     if sub in ("clean", "prune"):
