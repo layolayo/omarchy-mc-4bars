@@ -171,9 +171,66 @@ PanelWindow {
     }
   }
 
+  function getLayoutSectionEntries(layout, section) {
+    if (!layout) return []
+    if (section === "center") {
+      var cb = Array.isArray(layout.centerBegin) ? layout.centerBegin : []
+      var c = Array.isArray(layout.center) ? layout.center : []
+      var ce = Array.isArray(layout.centerEnd) ? layout.centerEnd : []
+      return cb.concat(c, ce)
+    }
+    return Array.isArray(layout[section]) ? layout[section].slice() : []
+  }
+
+  function setLayoutSectionEntries(barKey, layout, section, items) {
+    if (!layout) return
+    var list = Array.isArray(items) ? items.slice() : []
+    if (section !== "center") {
+      layout[section] = list
+      return
+    }
+    if (barKey === "bar") {
+      var clockIdx = -1
+      for (var i = 0; i < list.length; i++) {
+        if (BarModel.entryId(list[i]) === "omarchy.clock") {
+          clockIdx = i
+          break
+        }
+      }
+      if (clockIdx !== -1) {
+        layout.centerBegin = list.slice(0, clockIdx)
+        layout.center = [list[clockIdx]]
+        layout.centerEnd = list.slice(clockIdx + 1)
+        return
+      }
+      var prevCenter = Array.isArray(layout.center) ? layout.center : []
+      var prevIds = ({})
+      for (var p = 0; p < prevCenter.length; p++) {
+        var pid = BarModel.entryId(prevCenter[p])
+        if (pid) prevIds[pid] = true
+      }
+      var anchorIdx = -1
+      for (var j = 0; j < list.length; j++) {
+        if (prevIds[BarModel.entryId(list[j])]) {
+          anchorIdx = j
+          break
+        }
+      }
+      if (anchorIdx !== -1) {
+        layout.centerBegin = list.slice(0, anchorIdx)
+        layout.center = [list[anchorIdx]]
+        layout.centerEnd = list.slice(anchorIdx + 1)
+        return
+      }
+    }
+    layout.center = list
+    if (Array.isArray(layout.centerBegin)) layout.centerBegin = []
+    if (Array.isArray(layout.centerEnd)) layout.centerEnd = []
+  }
+
   function popEntryFromLayout(layout, targetId) {
     var found = null
-    var secs = ["left", "center", "right", "tray"]
+    var secs = ["left", "centerBegin", "center", "centerEnd", "right", "tray"]
     for (var s = 0; s < secs.length; s++) {
       var sec = secs[s]
       var arr = Array.isArray(layout[sec]) ? layout[sec] : []
@@ -192,7 +249,7 @@ PanelWindow {
 
   function layoutHasTray(layout) {
     if (!layout) return false
-    var secs = ["left", "center", "right"]
+    var secs = ["left", "centerBegin", "center", "centerEnd", "right"]
     for (var s = 0; s < secs.length; s++) {
       var arr = Array.isArray(layout[secs[s]]) ? layout[secs[s]] : []
       for (var i = 0; i < arr.length; i++) {
@@ -223,8 +280,9 @@ PanelWindow {
         if (finalSec === "tray" && (!layoutHasTray(targetLayout) || pluginId === "omarchy.tray")) {
           finalSec = destBarKey === "bar" ? "right" : "center"
         }
-        if (!Array.isArray(targetLayout[finalSec])) targetLayout[finalSec] = []
-        targetLayout[finalSec].push(entry)
+        var secItems = getLayoutSectionEntries(targetLayout, finalSec)
+        secItems.push(entry)
+        setLayoutSectionEntries(destBarKey, targetLayout, finalSec, secItems)
       }, true)
     })
   }
@@ -233,13 +291,13 @@ PanelWindow {
     Qt.callLater(function() {
       mutateShellConfig(function(cfg) {
         var layout = cfg[barKey].layout
-        var arr = Array.isArray(layout[section]) ? layout[section] : []
+        var arr = getLayoutSectionEntries(layout, section)
         var targetIdx = index + delta
         if (index < 0 || index >= arr.length || targetIdx < 0 || targetIdx >= arr.length) return
         var item = arr[index]
         arr.splice(index, 1)
         arr.splice(targetIdx, 0, item)
-        layout[section] = arr
+        setLayoutSectionEntries(barKey, layout, section, arr)
       }, barKey === "bar")
     })
   }
@@ -284,7 +342,7 @@ PanelWindow {
   function sectionEntries(barKey, section) {
     var barObj = root.shellConfig && root.shellConfig[barKey] ? root.shellConfig[barKey] : null
     var layout = barObj && barObj.layout ? barObj.layout : null
-    return layout && Array.isArray(layout[section]) ? layout[section] : []
+    return getLayoutSectionEntries(layout, section)
   }
 
   function totalWidgetsInBar(barKey) {

@@ -50,10 +50,12 @@ Item {
     var serial = barConfigSerial
     if (!layoutConfig) return false
     var l = Array.isArray(layoutConfig.left) ? layoutConfig.left.length : 0
+    var cb = Array.isArray(layoutConfig.centerBegin) ? layoutConfig.centerBegin.length : 0
     var c = Array.isArray(layoutConfig.center) ? layoutConfig.center.length : 0
+    var ce = Array.isArray(layoutConfig.centerEnd) ? layoutConfig.centerEnd.length : 0
     var r = Array.isArray(layoutConfig.right) ? layoutConfig.right.length : 0
     var t = Array.isArray(layoutConfig.tray) ? layoutConfig.tray.length : 0
-    return (l + c + r + t) > 0
+    return (l + cb + c + ce + r + t) > 0
   }
   property string centerAnchor: ""
   property bool requestedTransparent: false
@@ -193,7 +195,7 @@ Item {
     var stripped = root.canonicalWidgetId(moduleName)
     var changed = false
     mutateBottomBarConfig(function(bbar) {
-      var sections = ["left", "center", "right", "tray"]
+      var sections = ["left", "centerBegin", "center", "centerEnd", "right", "tray"]
       for (var s = 0; s < sections.length; s++) {
         var arr = bbar.layout[sections[s]] || []
         for (var i = 0; i < arr.length; i++) {
@@ -1009,10 +1011,15 @@ Item {
 
   function normalizeLayout(layout) {
     var normalized = Util.normalizeLayout(Util.isPlainObject(layout) ? layout : fallbackBarConfig.layout)
+    var mergedCenter = [].concat(
+      Array.isArray(normalized.centerBegin) ? normalized.centerBegin : [],
+      Array.isArray(normalized.center) ? normalized.center : [],
+      Array.isArray(normalized.centerEnd) ? normalized.centerEnd : []
+    )
     return {
-      left:   pinTrayToInner(normalized.left,   "left"),
-      center: pinTrayToInner(normalized.center, "center"),
-      right:  pinTrayToInner(normalized.right,  "right"),
+      left:   pinTrayToInner(normalized.left,  "left"),
+      center: pinTrayToInner(mergedCenter,     "center"),
+      right:  pinTrayToInner(normalized.right, "right"),
       tray:   normalized.tray
     }
   }
@@ -1243,6 +1250,16 @@ Item {
 
   function rawBottomLayoutSection(bbar, region) {
     if (!Util.isPlainObject(bbar.layout)) bbar.layout = {}
+    if (region === "center") {
+      var cb = Array.isArray(bbar.layout.centerBegin) ? bbar.layout.centerBegin : []
+      var c = Array.isArray(bbar.layout.center) ? bbar.layout.center : []
+      var ce = Array.isArray(bbar.layout.centerEnd) ? bbar.layout.centerEnd : []
+      if (cb.length > 0 || ce.length > 0) {
+        bbar.layout.center = cb.concat(c, ce)
+        delete bbar.layout.centerBegin
+        delete bbar.layout.centerEnd
+      }
+    }
     if (!Array.isArray(bbar.layout[region])) bbar.layout[region] = []
     return bbar.layout[region]
   }

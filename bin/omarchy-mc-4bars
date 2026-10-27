@@ -50,6 +50,7 @@ def omarchy_bin(name: str) -> str:
         return str(usr_candidate)
     return name
 SECTIONS = ("left", "center", "right", "tray")
+RAW_SECTIONS = ("left", "centerBegin", "center", "centerEnd", "right", "tray")
 EDGES = ("top", "bottom", "left", "right")
 BAR_SLOTS = (
     ("bar", "top", "Top Bar"),
@@ -97,6 +98,8 @@ PLUGIN_SHORT_ALIASES = {
     "moon-phase": "jeffmtb.moon-phase",
     "lunar": "jeffmtb.moon-phase",
     "lunar-phase": "jeffmtb.moon-phase",
+    "omatide": "gnosis.tide",
+    "tide": "gnosis.tide",
 }
 
 
@@ -288,7 +291,7 @@ def prune_invalid_entries(cfg: dict) -> list[tuple[str, str]]:
     removed: list[tuple[str, str]] = []
     for slot_key, _def_pos, _label in BAR_SLOTS:
         layout = cfg.get(slot_key, {}).get("layout", {})
-        for sec in SECTIONS:
+        for sec in RAW_SECTIONS:
             items = layout.get(sec)
             if not isinstance(items, list):
                 continue
@@ -404,10 +407,51 @@ def ensure_plugin_enabled(cfg: dict, plugin_id: str) -> bool:
     return True
 
 
+def get_section_items(layout: dict, sec: str) -> list:
+    """Return items in a logical section ('center' combines centerBegin + center + centerEnd)."""
+    if not isinstance(layout, dict):
+        return []
+    if sec == "center":
+        out = []
+        for k in ("centerBegin", "center", "centerEnd"):
+            arr = layout.get(k)
+            if isinstance(arr, list):
+                out.extend(arr)
+        return out
+    arr = layout.get(sec)
+    return list(arr) if isinstance(arr, list) else []
+
+
+def set_section_items(slot_key: str, layout: dict, sec: str, items: list) -> None:
+    """Write items back to a logical section, preserving centerBegin/center/centerEnd around the clock on the primary bar."""
+    if sec != "center":
+        layout[sec] = list(items)
+        return
+    if slot_key == "bar":
+        clock_idx = next((i for i, x in enumerate(items) if entry_id(x) == "omarchy.clock"), -1)
+        if clock_idx != -1:
+            layout["centerBegin"] = list(items[:clock_idx])
+            layout["center"] = [items[clock_idx]]
+            layout["centerEnd"] = list(items[clock_idx + 1 :])
+            return
+        prev_center_ids = {entry_id(x) for x in layout.get("center", []) if entry_id(x)}
+        anchor_idx = next((i for i, x in enumerate(items) if entry_id(x) in prev_center_ids), -1)
+        if anchor_idx != -1:
+            layout["centerBegin"] = list(items[:anchor_idx])
+            layout["center"] = [items[anchor_idx]]
+            layout["centerEnd"] = list(items[anchor_idx + 1 :])
+            return
+    layout["center"] = list(items)
+    if "centerBegin" in layout:
+        layout["centerBegin"] = []
+    if "centerEnd" in layout:
+        layout["centerEnd"] = []
+
+
 def pop_from_layout(layout: dict, target_id: str):
     """Remove all occurrences of target_id across sections and return the first full entry."""
     found_entry = None
-    for sec in SECTIONS:
+    for sec in RAW_SECTIONS:
         items = layout.get(sec)
         if not isinstance(items, list):
             continue
@@ -459,7 +503,7 @@ def call_ipc(*args: str, quiet: bool = False) -> int:
 
 def count_widgets(layout: dict) -> int:
     total = 0
-    for sec in SECTIONS:
+    for sec in RAW_SECTIONS:
         items = layout.get(sec, [])
         if isinstance(items, list):
             total += sum(1 for x in items if entry_id(x))
@@ -470,7 +514,7 @@ def layout_has_tray(layout: dict) -> bool:
     """Return True if 'omarchy.tray' is placed in left, center, or right of this bar."""
     if not isinstance(layout, dict):
         return False
-    for sec in ("left", "center", "right"):
+    for sec in ("left", "centerBegin", "center", "centerEnd", "right"):
         for item in layout.get(sec, []):
             if entry_id(item) == "omarchy.tray":
                 return True
@@ -499,7 +543,7 @@ def print_layout(cfg: dict) -> None:
         else:
             labels = [("L (left)", "left"), ("M (middle)", "center"), ("R (right)", "right"), ("Tray", "tray")]
         for label, sec in labels:
-            items = layout.get(sec, [])
+            items = get_section_items(layout, sec)
             if not items and sec == "tray":
                 continue
             ids = [short_label(entry_id(x)) for x in items if entry_id(x)]
@@ -579,7 +623,7 @@ def run_tui() -> None:
             display_lines = []
             flat_rows = []
             for sec_key, sec_label, hk in sec_names:
-                items = [x for x in bbar["layout"].get(sec_key, []) if entry_id(x)]
+                items = [x for x in get_section_items(bbar["layout"], sec_key) if entry_id(x)]
                 hdr_title = f"── [{hk}] {sec_label} ({len(items)}) "
                 display_lines.append(("header", hdr_title, None))
                 if not items:
@@ -825,11 +869,12 @@ def run_tui() -> None:
                 pending_remove = (slot_key, pos.upper(), eid)
             elif flat_rows and ch in (ord("["), ord("]")):
                 sec_key, sec_label, idx, eid, _dli = flat_rows[row_idx]
-                items = bbar["layout"].get(sec_key, [])
+                items = get_section_items(bbar["layout"], sec_key)
                 delta = -1 if ch == ord("[") else 1
                 new_idx = idx + delta
                 if 0 <= new_idx < len(items):
                     items[idx], items[new_idx] = items[new_idx], items[idx]
+                    set_section_items(slot_key, bbar["layout"], sec_key, items)
                     save_config(cfg)
                     _tui_reload(slot_key == "bar")
                     follow_eid = eid
@@ -859,7 +904,9 @@ def run_tui() -> None:
                     status_msg = "'omarchy.tray' hosts the tray drawer and cannot be placed inside itself."
                 else:
                     popped = pop_from_layout(bbar["layout"], eid) or {"id": eid}
-                    bbar["layout"].setdefault(target_sec, []).append(popped)
+                    sec_items = get_section_items(bbar["layout"], target_sec)
+                    sec_items.append(popped)
+                    set_section_items(slot_key, bbar["layout"], target_sec, sec_items)
                     save_config(cfg)
                     _tui_reload(slot_key == "bar")
                     follow_eid = eid
@@ -882,7 +929,9 @@ def run_tui() -> None:
                 if dest_sec == "tray" and not layout_has_tray(cfg[dest_slot]["layout"]):
                     dest_sec = "right" if dest_slot == "bar" else "center"
                 popped = pop_from_layout(bbar["layout"], eid) or {"id": eid}
-                cfg[dest_slot]["layout"].setdefault(dest_sec, []).append(popped)
+                dest_items = get_section_items(cfg[dest_slot]["layout"], dest_sec)
+                dest_items.append(popped)
+                set_section_items(dest_slot, cfg[dest_slot]["layout"], dest_sec, dest_items)
                 save_config(cfg)
                 _tui_reload(slot_key == "bar" or dest_slot == "bar")
                 status_msg = f"Sent '{eid.split('.')[-1]}' → {target_edge.upper()} bar ({dest_slot})."
@@ -940,7 +989,6 @@ def cmd_move(plugin_id_raw: str, section_raw: str, extra_args: list, target_bar_
     rescan_needed = ensure_plugin_enabled(cfg, PLUGIN_ID)
 
     touched_primary = dest_slot == "bar"
-    dest_bar["layout"].setdefault(sec, [])
 
     for plugin_id in plugin_ids:
         existing_entry = None
@@ -952,7 +1000,9 @@ def cmd_move(plugin_id_raw: str, section_raw: str, extra_args: list, target_bar_
                 if existing_entry is None:
                     existing_entry = popped
         entry = existing_entry if existing_entry is not None else {"id": plugin_id}
-        insert_into_section(dest_bar["layout"][sec], entry, before=before, after=after, index=index)
+        sec_items = get_section_items(dest_bar["layout"], sec)
+        insert_into_section(sec_items, entry, before=before, after=after, index=index)
+        set_section_items(dest_slot, dest_bar["layout"], sec, sec_items)
         if after:
             after = plugin_id
 
@@ -1126,7 +1176,7 @@ def main() -> None:
             layout = cfg[slot_key]["layout"]
             edge = cfg[slot_key].get("position", def_pos)
             for sec in SECTIONS:
-                for item in layout.get(sec, []):
+                for item in get_section_items(layout, sec):
                     eid = entry_id(item)
                     if eid and (eid.lower() == raw_pid.lower() or eid.lower().endswith("." + raw_pid.lower())):
                         matches.append((slot_key, edge, sec, eid))
@@ -1136,7 +1186,7 @@ def main() -> None:
                 layout = cfg[slot_key]["layout"]
                 edge = cfg[slot_key].get("position", def_pos)
                 for sec in SECTIONS:
-                    for item in layout.get(sec, []):
+                    for item in get_section_items(layout, sec):
                         eid = entry_id(item)
                         if eid == resolved_pid:
                             matches.append((slot_key, edge, sec, eid))
