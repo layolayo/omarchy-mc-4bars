@@ -80,9 +80,9 @@ Item {
   readonly property color glassBackground: Qt.rgba(background.r, background.g, background.b, Math.min(background.a, 0.35))
   property color urgent: Commons.Color.bar.active
 
-  Behavior on barForeground { enabled: root.foregroundAnimationEnabled; ColorAnimation { duration: Style.duration(420); easing.type: Easing.OutCubic } }
-  Behavior on background { ColorAnimation { duration: Style.duration(420); easing.type: Easing.OutCubic } }
-  Behavior on urgent { ColorAnimation { duration: Style.duration(420); easing.type: Easing.OutCubic } }
+  Behavior on barForeground { enabled: root.foregroundAnimationEnabled; ColorAnimation { duration: Style.duration(250); easing.type: Easing.OutCubic } }
+  Behavior on background { ColorAnimation { duration: Style.duration(250); easing.type: Easing.OutCubic } }
+  Behavior on urgent { ColorAnimation { duration: Style.duration(250); easing.type: Easing.OutCubic } }
 
   property var tooltipTarget: null
   property var pendingTooltipTarget: null
@@ -802,6 +802,7 @@ Item {
 
   function clearTooltip() {
     tooltipTimer.stop()
+    if (tooltipShown) tooltipWarmTimer.restart()
     pendingTooltipTarget = null
     pendingTooltipText = ""
     tooltipTarget = null
@@ -1553,7 +1554,7 @@ Item {
   }
 
   FileView {
-    path: root.stateHome + "/omarchy/current"
+    path: root.stateHome + "/omarchy/current/theme"
     watchChanges: true
     printErrors: false
     onFileChanged: root.scheduleTransparentForegroundRefresh()
@@ -1565,6 +1566,7 @@ Item {
   }
 
   function showTooltip(target, text) {
+    var warm = tooltipShown || tooltipWarmTimer.running
     clearTooltip()
 
     if (!targetTooltipHovered(target) || !text) {
@@ -1587,7 +1589,8 @@ Item {
       tooltipText = pendingTooltipText
       pendingTooltipTarget = null
       pendingTooltipText = ""
-      tooltipTimer.restart()
+      if (warm) tooltipShown = true
+      else tooltipTimer.restart()
     })
   }
 
@@ -1605,6 +1608,11 @@ Item {
       if (root.targetTooltipHovered(root.tooltipTarget)) root.tooltipShown = true
       else root.clearTooltip()
     }
+  }
+
+  Timer {
+    id: tooltipWarmTimer
+    interval: 400
   }
 
   Timer {
@@ -1774,15 +1782,10 @@ Item {
       onTriggered: root.refreshHyprFullscreenState()
     }
 
-    visible: !remapGuard.remapping && (cutoutWaitOver || !cutoutPending)
+    visible: cutoutWaitOver || !cutoutPending
     exclusionMode: effectiveHidden ? ExclusionMode.Ignore : ExclusionMode.Auto
     mask: Region {
       item: !barWindow.effectiveHidden ? barContentLoader : null
-    }
-
-    ScreenMoveRemap {
-      id: remapGuard
-      window: barWindow
     }
 
     margins {
@@ -1845,6 +1848,14 @@ Item {
       implicitWidth: Math.ceil(tooltipBubble.implicitWidth)
       implicitHeight: Math.ceil(tooltipBubble.implicitHeight)
 
+      readonly property bool scaleReady: visible && Math.round(devicePixelRatio * 120) === Math.round(barWindow.devicePixelRatio * 120)
+      property bool revealed: false
+
+      onVisibleChanged: if (!visible) revealed = false
+      onScaleReadyChanged: if (scaleReady) Qt.callLater(function() {
+        if (tooltipWindow.scaleReady) tooltipWindow.revealed = true
+      })
+
       anchor {
         id: tooltipAnchor
         window: barWindow
@@ -1881,6 +1892,7 @@ Item {
 
       BorderSurface {
         id: tooltipBubble
+        opacity: tooltipWindow.revealed ? 1 : 0
         implicitWidth: tooltipLabel.implicitWidth + 20
         implicitHeight: tooltipLabel.implicitHeight + 14
         color: Commons.Color.tooltip.background
@@ -2605,9 +2617,11 @@ Item {
       if ("bar" in target) target.bar = root.pluginBarApiFor(pluginApiId, moduleName, registered, firstParty)
       if ("shell" in target && !registered) target.shell = root.localShellFacadeFor(moduleName)
       if ("service" in target && !registered) {
-        target.service = moduleName === "io.github.layolayo.mc-4bars"
-          ? root.controller
-          : (root._localServices[root.canonicalWidgetId(moduleName)] || null)
+        try {
+          target.service = moduleName === "io.github.layolayo.mc-4bars"
+            ? root.controller
+            : (root._localServices[root.canonicalWidgetId(moduleName)] || null)
+        } catch (e) {}
       }
       if ("moduleName" in target) target.moduleName = moduleName
       if ("settings" in target) target.settings = moduleSettings
