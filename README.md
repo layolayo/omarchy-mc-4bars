@@ -157,8 +157,8 @@ omarchy-shell io.github.layolayo.mc-4bars reloadConfig
 
 ## Configuration & State Storage
 
-- **Bar Layouts**: Stored in `~/.config/omarchy/shell.json` across the `bar` (Top), `bottomBar` (Bottom), `leftBar` (Left), and `rightBar` (Right) objects (`position`, `background`, `autoHide`, and `layout.{left,center,right,tray}`).
-- **Visibility State Files**: Synchronised with `~/.local/state/omarchy/toggles/bar-off` (primary Top Bar) and `~/.local/state/omarchy/toggles/mc-4bars-auto-bar-off` (automatic fullscreen conceal state).
+- **Bar Layouts**: Stored in `~/.config/omarchy/shell.json` across the `bar` (Top), `bottomBar` (Bottom), `leftBar` (Left), and `rightBar` (Right) objects (`position`, `background`, `autoHide`, and `layout.{left,centerBegin,center,centerEnd,right,tray}`).
+- **Visibility State Files**: Synchronised with `~/.local/state/omarchy/toggles/bar-off` (primary Top Bar) and `~/.local/state/omarchy/toggles/{bottom,left,right}-bar-off` (secondary bars). Fullscreen auto-conceal runs purely in memory without mutating persistent `bar-off` toggle files on disk.
 
 ---
 
