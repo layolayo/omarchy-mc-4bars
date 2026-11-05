@@ -285,6 +285,7 @@ Item {
     QtObject {
       id: facade
       required property string ownerPluginId
+      property int _serviceRevision: 0
       property var _serviceLookup: null
       property var _firstPartyServiceLookup: null
       property var _summon: null
@@ -294,10 +295,12 @@ Item {
       property var _updateSettings: null
 
       function serviceFor(requestedId) {
+        var rev = facade._serviceRevision
         return _serviceLookup ? _serviceLookup(String(requestedId || "")) : null
       }
 
       function firstPartyServiceFor(requestedId) {
+        var rev = facade._serviceRevision
         return _firstPartyServiceLookup ? _firstPartyServiceLookup(String(requestedId || "")) : null
       }
 
@@ -345,10 +348,12 @@ Item {
       _serviceLookup: function(requestedId) {
         if (!owns(requestedId)) return null
         if (ownerKey === "io.github.layolayo.mc-4bars") return root.controller
-        return root._localServices[ownerKey] || null
+        return root._localServices[ownerKey] || root.ensureLocalService(ownerKey, root.localManifestFor(ownerKey))
       },
       _firstPartyServiceLookup: function(requestedId) {
-        if (owns(requestedId)) return root._localServices[ownerKey] || null
+        if (owns(requestedId)) {
+          return root._localServices[ownerKey] || root.ensureLocalService(ownerKey, root.localManifestFor(ownerKey))
+        }
         if (root.shell && typeof root.shell.firstPartyServiceFor === "function") {
           return root.shell.firstPartyServiceFor(requestedId)
         }
@@ -407,8 +412,17 @@ Item {
       for (var sk in root._localServices) next[sk] = root._localServices[sk]
       next[key] = inst
       root._localServices = next
+      if (root._localShellFacades[key]) {
+        root._localShellFacades[key]._serviceRevision += 1
+      }
       if (root._localPanels[key] && "service" in root._localPanels[key]) {
         root._localPanels[key].service = inst
+      }
+      for (var ms = 0; ms < root.moduleSlots.length; ms++) {
+        var slot = root.moduleSlots[ms]
+        if (slot && root.canonicalWidgetId(slot.moduleName) === key) {
+          slot.injectProps()
+        }
       }
     }
     if (comp.status === Component.Loading) {
@@ -423,7 +437,7 @@ Item {
     var wanted = ({})
     var regions = ["left", "center", "right", "tray"]
     for (var r = 0; r < regions.length; r++) {
-      var entries = root.layoutEntries(regions[r])
+      var entries = (root.layoutConfig && Array.isArray(root.layoutConfig[regions[r]])) ? root.layoutConfig[regions[r]] : []
       for (var i = 0; i < entries.length; i++) {
         var id = root.canonicalWidgetId(root.entryId(entries[i]))
         if (BarModel.isSafePluginId(id) && id.indexOf("omarchy.") !== 0) wanted[id] = true
@@ -442,6 +456,9 @@ Item {
       var next = ({})
       for (var k in root._localServices) if (k !== existingId) next[k] = root._localServices[k]
       root._localServices = next
+      if (root._localShellFacades[existingId]) {
+        root._localShellFacades[existingId]._serviceRevision += 1
+      }
     }
   }
 
@@ -1046,8 +1063,8 @@ Item {
       return
     }
     layoutConfig = next
-    barConfigSerial++
     root.syncLocalPluginServices()
+    barConfigSerial++
   }
 
   function applySettingsDelta(delta) {
@@ -2372,11 +2389,15 @@ Item {
       for (var rk in raw) merged[rk] = raw[rk]
       return merged
     }
-    readonly property var registryMetadata: root.barWidgetRegistry.metadataFor(root.canonicalWidgetId(moduleName))
+    readonly property var registryMetadata: {
+      var rev = root.barWidgetRegistry ? root.barWidgetRegistry.revision : 0
+      return root.barWidgetRegistry ? root.barWidgetRegistry.metadataFor(root.canonicalWidgetId(moduleName)) : null
+    }
     readonly property bool firstParty: registryMetadata && registryMetadata.firstParty === true
     readonly property string pluginApiId: registered ? root.canonicalWidgetId(moduleName) : "bar-entry:" + moduleName
     readonly property var registryComponent: {
-      var w = root.barWidgetRegistry.widgets
+      var rev = root.barWidgetRegistry ? root.barWidgetRegistry.revision : 0
+      var w = root.barWidgetRegistry && root.barWidgetRegistry.widgets ? root.barWidgetRegistry.widgets : ({})
       var registryName = root.canonicalWidgetId(moduleName)
       return w[registryName] ? w[registryName].component : null
     }
@@ -2615,14 +2636,7 @@ Item {
       var target = activeItem
       if (!target) return
       if ("bar" in target) target.bar = root.pluginBarApiFor(pluginApiId, moduleName, registered, firstParty)
-      if ("shell" in target && !registered) target.shell = root.localShellFacadeFor(moduleName)
-      if ("service" in target && !registered) {
-        try {
-          target.service = moduleName === "io.github.layolayo.mc-4bars"
-            ? root.controller
-            : (root._localServices[root.canonicalWidgetId(moduleName)] || null)
-        } catch (e) {}
-      }
+      if ("shell" in target && !firstParty) target.shell = root.localShellFacadeFor(moduleName)
       if ("moduleName" in target) target.moduleName = moduleName
       if ("settings" in target) target.settings = moduleSettings
     }

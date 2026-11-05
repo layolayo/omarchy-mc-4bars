@@ -388,10 +388,16 @@ Item {
       if (anyVisible) populated[k].hideBar()
       else populated[k].showBar()
     }
+    if (!anyVisible && root.primaryBarFlagHidden && !root.primaryFullscreenDesktop) {
+      Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "off"])
+    }
     return anyVisible ? "hidden" : "visible"
   }
 
   function showAllSecondaryBars() {
+    if (root.primaryBarFlagHidden && !root.primaryFullscreenDesktop) {
+      Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "off"])
+    }
     for (var i = 0; i < secondaryBars.length; i++) {
       if (secondaryBars[i].hasWidgets || secondaryBars[i] === bottomBarInstance) {
         secondaryBars[i].showBar()
@@ -410,74 +416,36 @@ Item {
   }
 
   function syncAllHiddenStates() {
-    primaryAutoHideMarkerProbe.running = true
     primaryBarHiddenProbe.running = true
     primaryFullscreenDesktopProbe.running = true
-    root.refreshPrimaryFullscreenState()
     for (var i = 0; i < secondaryBars.length; i++) {
       secondaryBars[i].syncHiddenState()
     }
   }
 
   property bool primaryBarFlagHidden: false
-  property bool primaryAutoHidByFullscreen: false
   property bool primaryFullscreenDesktop: false
-  property int primaryHyprFullscreenSerial: 0
 
   function omarchyBin(name) {
     return root.omarchyPath ? (root.omarchyPath + "/bin/" + name) : name
   }
 
-  readonly property bool primaryScreenFullscreen: {
-    var serial = root.primaryHyprFullscreenSerial
-    var screens = Quickshell.screens
-    for (var s = 0; s < screens.length; s++) {
-      var monitor = Hyprland.monitorFor(screens[s])
-      var activeWorkspace = monitor ? monitor.activeWorkspace : null
-      if (!activeWorkspace) continue
-      var workspaceId = activeWorkspace.id
-      var toplevels = Hyprland.toplevels.values
-      for (var i = 0; i < toplevels.length; i++) {
-        var toplevel = toplevels[i]
-        if (!toplevel || !toplevel.workspace || toplevel.workspace.id !== workspaceId) continue
-        var ipc = toplevel.lastIpcObject
-        var fs = ipc && ipc.fullscreen ? Number(ipc.fullscreen) : 0
-        if (fs >= 2) return true
-      }
-    }
-    return false
-  }
-
-  readonly property bool primaryFullscreenActive: root.primaryFullscreenDesktop || root.primaryScreenFullscreen
-
-  onPrimaryFullscreenActiveChanged: root.applyPrimaryBarHidden()
-
-  function applyPrimaryBarHidden() {
-    var fsActive = root.primaryFullscreenActive
-    if (fsActive) {
-      if (!root.primaryBarFlagHidden && !root.primaryAutoHidByFullscreen) {
-        root.primaryAutoHidByFullscreen = true
-        Util.execArgv([root.omarchyBin("omarchy-toggle"), "mc-4bars-auto-bar-off", "on"])
-        Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "on"])
-      } else if (root.primaryAutoHidByFullscreen && !root.primaryBarFlagHidden) {
-        Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "on"])
-      }
-    } else {
-      if (root.primaryAutoHidByFullscreen) {
-        root.primaryAutoHidByFullscreen = false
-        Util.execArgv([root.omarchyBin("omarchy-toggle"), "mc-4bars-auto-bar-off", "off"])
-        Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "off"])
-      }
-    }
-  }
-
+  // Clean up any legacy mc-4bars-auto-bar-off state marker that may have
+  // stranded bar-off on disk across a shell reload or system update.
+  // Upstream Omarchy's primary bar already handles fullscreen windows
+  // natively in memory (underFullscreen), and omarchy-toggle-fullscreen-desktop
+  // toggles bar-off directly.
   Process {
-    id: primaryAutoHideMarkerProbe
+    id: legacyAutoHideCleanupProbe
     command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/mc-4bars-auto-bar-off"]
     running: true
     onExited: function(exitCode) {
-      root.primaryAutoHidByFullscreen = (exitCode === 0)
-      root.applyPrimaryBarHidden()
+      if (exitCode === 0) {
+        Util.execArgv([root.omarchyBin("omarchy-toggle"), "mc-4bars-auto-bar-off", "off"])
+        if (!root.primaryFullscreenDesktop) {
+          Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "off"])
+        }
+      }
     }
   }
 
@@ -487,11 +455,6 @@ Item {
     running: true
     onExited: function(exitCode) {
       root.primaryBarFlagHidden = (exitCode === 0)
-      if (!root.primaryFullscreenActive && !root.primaryBarFlagHidden && root.primaryAutoHidByFullscreen) {
-        root.primaryAutoHidByFullscreen = false
-        Util.execArgv([root.omarchyBin("omarchy-toggle"), "mc-4bars-auto-bar-off", "off"])
-      }
-      root.applyPrimaryBarHidden()
     }
   }
 
@@ -501,7 +464,6 @@ Item {
     running: true
     onExited: function(exitCode) {
       root.primaryFullscreenDesktop = (exitCode === 0)
-      root.applyPrimaryBarHidden()
     }
   }
 
@@ -509,10 +471,7 @@ Item {
     path: root.home + "/.local/state/omarchy/toggles"
     watchChanges: true
     printErrors: false
-    onFileChanged: {
-      primaryAutoHideMarkerProbe.running = true
-      primaryBarHiddenProbe.running = true
-    }
+    onFileChanged: primaryBarHiddenProbe.running = true
   }
 
   FileView {
@@ -520,54 +479,6 @@ Item {
     watchChanges: true
     printErrors: false
     onFileChanged: primaryFullscreenDesktopProbe.running = true
-  }
-
-  Timer {
-    id: primaryHyprFollowupTimer
-    interval: 60
-    repeat: false
-    onTriggered: {
-      root.primaryHyprFullscreenSerial += 1
-      root.applyPrimaryBarHidden()
-    }
-  }
-
-  Timer {
-    interval: 350
-    running: true
-    repeat: false
-    onTriggered: {
-      primaryAutoHideMarkerProbe.running = true
-      primaryBarHiddenProbe.running = true
-      root.refreshPrimaryFullscreenState()
-    }
-  }
-
-  Timer {
-    interval: 1500
-    running: true
-    repeat: false
-    onTriggered: root.refreshPrimaryFullscreenState()
-  }
-
-  function refreshPrimaryFullscreenState() {
-    Hyprland.refreshWorkspaces()
-    Hyprland.refreshToplevels()
-    root.primaryHyprFullscreenSerial += 1
-    root.applyPrimaryBarHidden()
-    primaryHyprFollowupTimer.restart()
-  }
-
-  Connections {
-    target: Hyprland
-    function onRawEvent(event) {
-      var name = event ? String(event.name) : ""
-      if (name === "fullscreen" || name === "workspace" || name === "workspacev2" ||
-          name === "focusedmon" || name === "activewindow" || name === "activewindowv2" ||
-          name === "openwindow" || name === "closewindow" || name === "movewindow") {
-        root.refreshPrimaryFullscreenState()
-      }
-    }
   }
 
   function togglePluginAcrossBars(id) {
