@@ -1642,33 +1642,95 @@ Item {
   property bool fullscreenDesktop: false
   property int hyprFullscreenSerial: 0
   property double lastToggleMs: 0
+  property bool toggleWriteInFlight: false
+
+  Process {
+    id: barToggleWriteProc
+    property bool queuedState: false
+    property bool hasQueuedState: false
+    onExited: function() {
+      if (barToggleWriteProc.hasQueuedState) {
+        var nextHidden = barToggleWriteProc.queuedState
+        barToggleWriteProc.hasQueuedState = false
+        root.persistBarHiddenState(nextHidden)
+        return
+      }
+      root.toggleWriteInFlight = false
+    }
+  }
+
+  function persistBarHiddenState(hidden) {
+    if (barToggleWriteProc.running) {
+      barToggleWriteProc.queuedState = !!hidden
+      barToggleWriteProc.hasQueuedState = true
+      return
+    }
+    root.toggleWriteInFlight = true
+    barToggleWriteProc.command = [root.omarchyBin("omarchy-toggle"), root.toggleFlag, hidden ? "on" : "off"]
+    barToggleWriteProc.running = true
+  }
+
+  function requestBarHiddenProbe(force) {
+    if (!force && (root.toggleWriteInFlight || (Date.now() - root.lastToggleMs < 500))) {
+      return
+    }
+    if (barHiddenProbe.running) {
+      barHiddenProbe.rescanRequested = true
+    } else {
+      barHiddenProbe.running = true
+    }
+  }
+
+  function requestFullscreenDesktopProbe() {
+    if (fullscreenDesktopProbe.running) {
+      fullscreenDesktopProbe.rescanRequested = true
+    } else {
+      fullscreenDesktopProbe.running = true
+    }
+  }
 
   Process {
     id: barHiddenProbe
+    property bool rescanRequested: false
     command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/" + root.toggleFlag]
     running: true
-    onExited: function(exitCode) { root.barHidden = (exitCode === 0) }
+    onExited: function(exitCode) {
+      if (!root.toggleWriteInFlight && (Date.now() - root.lastToggleMs >= 500)) {
+        root.barHidden = (exitCode === 0)
+      }
+      if (barHiddenProbe.rescanRequested) {
+        barHiddenProbe.rescanRequested = false
+        barHiddenProbe.running = true
+      }
+    }
   }
 
   Process {
     id: fullscreenDesktopProbe
+    property bool rescanRequested: false
     command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
     running: true
-    onExited: function(exitCode) { root.fullscreenDesktop = (exitCode === 0) }
+    onExited: function(exitCode) {
+      root.fullscreenDesktop = (exitCode === 0)
+      if (fullscreenDesktopProbe.rescanRequested) {
+        fullscreenDesktopProbe.rescanRequested = false
+        fullscreenDesktopProbe.running = true
+      }
+    }
   }
 
   FileView {
     path: root.home + "/.local/state/omarchy/toggles"
     watchChanges: true
     printErrors: false
-    onFileChanged: barHiddenProbe.running = true
+    onFileChanged: root.requestBarHiddenProbe(false)
   }
 
   FileView {
     path: root.home + "/.local/state/omarchy/toggles/hypr"
     watchChanges: true
     printErrors: false
-    onFileChanged: fullscreenDesktopProbe.running = true
+    onFileChanged: root.requestFullscreenDesktopProbe()
   }
 
   Timer {
@@ -1698,8 +1760,8 @@ Item {
   }
 
   function syncHiddenState() {
-    barHiddenProbe.running = true
-    fullscreenDesktopProbe.running = true
+    root.requestBarHiddenProbe(true)
+    root.requestFullscreenDesktopProbe()
     root.refreshHyprFullscreenState()
   }
 
@@ -1710,21 +1772,21 @@ Item {
     }
     root.lastToggleMs = now
     root.barHidden = !root.barHidden
-    Util.execArgv([root.omarchyBin("omarchy-toggle"), root.toggleFlag, root.barHidden ? "on" : "off"])
+    root.persistBarHiddenState(root.barHidden)
     return root.barHidden ? "hidden" : "visible"
   }
 
   function showBar() {
     root.lastToggleMs = Date.now()
     root.barHidden = false
-    Util.execArgv([root.omarchyBin("omarchy-toggle"), root.toggleFlag, "off"])
+    root.persistBarHiddenState(false)
     return "visible"
   }
 
   function hideBar() {
     root.lastToggleMs = Date.now()
     root.barHidden = true
-    Util.execArgv([root.omarchyBin("omarchy-toggle"), root.toggleFlag, "on"])
+    root.persistBarHiddenState(true)
     return "hidden"
   }
 

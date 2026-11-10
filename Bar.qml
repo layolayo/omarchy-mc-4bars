@@ -416,10 +416,26 @@ Item {
   }
 
   function syncAllHiddenStates() {
-    primaryBarHiddenProbe.running = true
-    primaryFullscreenDesktopProbe.running = true
+    root.requestPrimaryBarHiddenProbe()
+    root.requestPrimaryFullscreenDesktopProbe()
     for (var i = 0; i < secondaryBars.length; i++) {
       secondaryBars[i].syncHiddenState()
+    }
+  }
+
+  function requestPrimaryBarHiddenProbe() {
+    if (primaryBarHiddenProbe.running) {
+      primaryBarHiddenProbe.rescanRequested = true
+    } else {
+      primaryBarHiddenProbe.running = true
+    }
+  }
+
+  function requestPrimaryFullscreenDesktopProbe() {
+    if (primaryFullscreenDesktopProbe.running) {
+      primaryFullscreenDesktopProbe.rescanRequested = true
+    } else {
+      primaryFullscreenDesktopProbe.running = true
     }
   }
 
@@ -451,19 +467,29 @@ Item {
 
   Process {
     id: primaryBarHiddenProbe
+    property bool rescanRequested: false
     command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/bar-off"]
     running: true
     onExited: function(exitCode) {
       root.primaryBarFlagHidden = (exitCode === 0)
+      if (primaryBarHiddenProbe.rescanRequested) {
+        primaryBarHiddenProbe.rescanRequested = false
+        primaryBarHiddenProbe.running = true
+      }
     }
   }
 
   Process {
     id: primaryFullscreenDesktopProbe
+    property bool rescanRequested: false
     command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
     running: true
     onExited: function(exitCode) {
       root.primaryFullscreenDesktop = (exitCode === 0)
+      if (primaryFullscreenDesktopProbe.rescanRequested) {
+        primaryFullscreenDesktopProbe.rescanRequested = false
+        primaryFullscreenDesktopProbe.running = true
+      }
     }
   }
 
@@ -471,14 +497,14 @@ Item {
     path: root.home + "/.local/state/omarchy/toggles"
     watchChanges: true
     printErrors: false
-    onFileChanged: primaryBarHiddenProbe.running = true
+    onFileChanged: root.requestPrimaryBarHiddenProbe()
   }
 
   FileView {
     path: root.home + "/.local/state/omarchy/toggles/hypr"
     watchChanges: true
     printErrors: false
-    onFileChanged: primaryFullscreenDesktopProbe.running = true
+    onFileChanged: root.requestPrimaryFullscreenDesktopProbe()
   }
 
   function togglePluginAcrossBars(id) {
