@@ -25,7 +25,7 @@ Quad-edge status bar system for Omarchy Quattro Shell. Host independent status b
 
 ## Requirements
 
-- **Omarchy** with the **Quattro Shell** (`omarchy-shell` / `quickshell` and built-in `omarchy-toggle` / `omarchy-toggle-bar` utilities).
+- **Omarchy** with the **Quattro Shell** (`omarchy-shell` / `quickshell` and built-in `omarchy-toggle-bar` utility).
 - **Python 3** (`/usr/bin/python3`, standard library `curses` module) for the TUI and CLI helper.
 
 ---
@@ -158,18 +158,35 @@ omarchy-shell io.github.layolayo.mc-4bars reloadConfig
 ## Configuration & State Storage
 
 - **Bar Layouts**: Stored in `~/.config/omarchy/shell.json` across the `bar` (Top), `bottomBar` (Bottom), `leftBar` (Left), and `rightBar` (Right) objects (`position`, `background`, `autoHide`, and `layout.{left,centerBegin,center,centerEnd,right,tray}`).
-- **Visibility State Files**: Synchronised with `~/.local/state/omarchy/toggles/bar-off` (primary Top Bar) and `~/.local/state/omarchy/toggles/{bottom,left,right}-bar-off` (secondary bars). Fullscreen auto-conceal runs purely in memory without mutating persistent `bar-off` toggle files on disk.
+- **Userspace Visibility State**: Secondary bar visibility (`bottomBar`, `leftBar`, `rightBar`) is persisted inside the plugin's isolated userspace state file `~/.local/state/io.github.layolayo.mc-4bars/visibility.json` (mode `0600`), with automatic one-time migration and cleanup of any legacy toggle markers. Primary Top Bar visibility is read from `~/.local/state/omarchy/toggles/bar-off` and toggled via `omarchy-toggle-bar`. Fullscreen auto-conceal runs purely in memory without mutating persistent state files on disk.
 
 ---
 
-## Security & Hardening
+## Userspace Architecture, Security & Hardening
 
+- **Decoupled Userspace Bar Facade (`SecondaryBarApi.qml`)**: Secondary bars instantiate a self-contained userspace `QtObject` bar facade (`SecondaryBarApi.qml`) and pure-JS layout model (`BarModel.js`) rather than binding to internal Omarchy shell helpers (`PluginBarApi` or `Util`), insulating the plugin against upstream shell refactors while preserving backwards compatibility with both current and older third-party widgets.
 - **Zero Network Access**: All configuration, state inspection, and IPC operations execute locally.
-- **Per-Plugin Capability & QObject Isolation**: Secondary bars instantiate third-party services and panels with `parent = null` and inject per-plugin capability-scoped `PluginBarApi` and shell facades (`localShellFacadeFor`), preventing cross-plugin service/settings access or QObject parent-tree traversal.
-- **Zero Command-Line Payload Exposure**: QML configuration updates pipe JSON over `stdin` (`Quickshell.Io.Process` with `stdinEnabled: true`) into `bin/omarchy-mc-4bars`, and IPC summon/toggle fallbacks never pass dynamic plugin payloads in child process command-line arguments.
+- **Per-Plugin Capability & QObject Isolation**: Secondary bars instantiate third-party services and panels with `parent = null` and inject per-plugin capability-scoped `SecondaryBarApi` and shell facades (`localShellFacadeFor`), preventing cross-plugin service/settings access or QObject parent-tree traversal.
+- **Zero Command-Line Payload Exposure**: QML configuration and visibility updates pipe JSON over `stdin` (`Quickshell.Io.Process` with `stdinEnabled: true`) into `bin/omarchy-mc-4bars`, and IPC summon/toggle fallbacks never pass dynamic plugin payloads in child process command-line arguments.
 - **Explicit Binary Path Resolution**: Subprocess invocations in QML and Python resolve Omarchy utilities through `$OMARCHY_PATH/bin` (`/usr/share/omarchy/bin`) and system binaries via `/usr/bin/...` without `/bin/sh -c` shell interpolation.
 - **Plain-Text Label Enforcement**: Dynamic labels in `ManagerPanel.qml` use `textFormat: Text.PlainText` to prevent Qt `AutoText` HTML or remote-image injection from third-party plugin manifests.
-- **Bounded File & IPC Reads with Atomic `0600` Writes**: `bin/omarchy-mc-4bars` enforces strict byte caps on `shell.json` (1 MiB), `manifest.json` (64 KiB, ignoring symlinks), and IPC output (256 KiB), with 2.0-second subprocess timeouts and atomic temporary-file writes (`tempfile.mkstemp` + `os.fchmod(fd, 0o600)` + `os.replace`).
+- **Bounded File & IPC Reads with Atomic `0600` Writes**: `bin/omarchy-mc-4bars` enforces strict byte caps on `shell.json` (1 MiB), `visibility.json` (64 KiB), `manifest.json` (64 KiB, ignoring symlinks), and IPC output (256 KiB), with 2.0-second subprocess timeouts and atomic temporary-file writes (`tempfile.mkstemp` + `os.fchmod(fd, 0o600)` + `os.replace`).
+
+---
+
+## Automated Testing
+
+Run the full userspace validation and runtime contract suite from the repository root:
+
+```bash
+./tests/run-tests.sh
+```
+
+This verifies:
+1. `omarchy plugin validate` manifest, entry-point, and symlink-free packaging compliance.
+2. `BarModel.js` pure-JavaScript unit tests (layout normalisation, tray pinning, cutout geometry, settings deltas, and path sanitisation).
+3. `bin/omarchy-mc-4bars` CLI, `shell.json` layout mutation, atomic `0600` state persistence, and legacy toggle migration tests in an isolated `XDG_CONFIG_HOME` / `XDG_STATE_HOME` sandbox.
+4. Live `quickshell` QML runtime contract execution against the installed Omarchy Quattro Shell (`Bar.qml`, `SecondaryBar.qml`, `SecondaryBarApi.qml`, `BarWidget.qml`, `ManagerPanel.qml`, `inTraySection`, popout card anchoring, and third-party widget hosting) with zero QML warnings or errors.
 
 ---
 

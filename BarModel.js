@@ -2,6 +2,62 @@ function isPlainObject(value) {
   return !!value && typeof value === "object" && !Array.isArray(value)
 }
 
+function clamp(value, min, max) {
+  var n = Number(value)
+  if (!isFinite(n)) return min
+  return Math.max(min, Math.min(max, n))
+}
+
+function fileUrl(path) {
+  if (!path) return ""
+  return "file://" + String(path).split("/").map(encodeURIComponent).join("/")
+}
+
+function canonicalWidgetId(id) {
+  return String(id || "").trim()
+}
+
+function fixedEdgeForRegion(region) {
+  if (region === "left") return "start"
+  if (region === "right") return "end"
+  return "center"
+}
+
+function normalizeLayoutEntry(entry) {
+  if (typeof entry === "string") {
+    var s = canonicalWidgetId(entry)
+    return s ? { id: s } : null
+  }
+  if (isPlainObject(entry) && entry.id) {
+    var copy = JSON.parse(JSON.stringify(entry))
+    copy.id = canonicalWidgetId(copy.id)
+    return copy.id ? copy : null
+  }
+  return null
+}
+
+function normalizeLayoutSection(list) {
+  if (!Array.isArray(list)) return []
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    var e = normalizeLayoutEntry(list[i])
+    if (e) out.push(e)
+  }
+  return out
+}
+
+function normalizeLayout(layout) {
+  var src = isPlainObject(layout) ? layout : {}
+  return {
+    left: normalizeLayoutSection(src.left),
+    centerBegin: normalizeLayoutSection(src.centerBegin),
+    center: normalizeLayoutSection(src.center),
+    centerEnd: normalizeLayoutSection(src.centerEnd),
+    right: normalizeLayoutSection(src.right),
+    tray: normalizeLayoutSection(src.tray)
+  }
+}
+
 function isSafePluginId(value) {
   var id = String(value || "").trim()
   if (!id || id.length > 128) return false
@@ -243,13 +299,21 @@ function barSizeFor(sizes, screenName, fallback) {
 if (typeof module !== "undefined") {
   module.exports = {
     barSizeFor: barSizeFor,
+    canonicalWidgetId: canonicalWidgetId,
     centerBesideRight: centerBesideRight,
+    clamp: clamp,
     cutoutPending: cutoutPending,
     cutoutTop: cutoutTop,
+    fileUrl: fileUrl,
+    fixedEdgeForRegion: fixedEdgeForRegion,
     isDrawnSlot: isDrawnSlot,
+    isPlainObject: isPlainObject,
     isSafeEntryPoint: isSafeEntryPoint,
     isSafePluginId: isSafePluginId,
     notchFloor: notchFloor,
+    normalizeLayout: normalizeLayout,
+    normalizeLayoutEntry: normalizeLayoutEntry,
+    normalizeLayoutSection: normalizeLayoutSection,
     parseCutouts: parseCutouts,
     pickDrawnSlot: pickDrawnSlot,
     pickPanelSlot: pickPanelSlot,

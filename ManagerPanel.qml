@@ -18,7 +18,8 @@ PanelWindow {
   property bool opened: visible
 
   readonly property string home: Quickshell.env("HOME")
-  readonly property string shellJsonPath: home + "/.config/omarchy/shell.json"
+  readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")
+  readonly property string shellJsonPath: configHome + "/omarchy/shell.json"
   readonly property string helperBinPath: {
     var rawUrl = String(Qt.resolvedUrl("bin/omarchy-mc-4bars"))
     return rawUrl.indexOf("file://") === 0 ? decodeURIComponent(rawUrl.slice(7)) : rawUrl

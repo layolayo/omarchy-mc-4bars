@@ -34,8 +34,13 @@ from pathlib import Path
 
 PLUGIN_ID = "io.github.layolayo.mc-4bars"
 LEGACY_PLUGIN_IDS = ("io.github.layolayo.mc-2bars", "matthew.bottom-bar")
-SHELL_JSON = Path.home() / ".config" / "omarchy" / "shell.json"
-USER_PLUGINS_DIR = Path.home() / ".config" / "omarchy" / "plugins"
+CONFIG_ROOT = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+STATE_ROOT = Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state"))
+SHELL_JSON = CONFIG_ROOT / "omarchy" / "shell.json"
+USER_PLUGINS_DIR = CONFIG_ROOT / "omarchy" / "plugins"
+STATE_DIR = STATE_ROOT / PLUGIN_ID
+VISIBILITY_JSON = STATE_DIR / "visibility.json"
+LEGACY_TOGGLES_DIR = STATE_ROOT / "omarchy" / "toggles"
 OMARCHY_ROOT = Path(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy"))
 SYSTEM_PLUGINS_DIR = OMARCHY_ROOT / "shell" / "plugins"
 OMARCHY_BIN_DIR = OMARCHY_ROOT / "bin"
@@ -157,11 +162,11 @@ def discover_valid_bar_widgets() -> dict[str, dict]:
         for pid, name in BUILTIN_OMARCHY_WIDGETS.items()
     }
 
-    # 1. Scan manifest.json files in system and user plugin directories
+    # 1. Scan manifest.json and *.manifest.json files in system and user plugin directories
     for root_dir in (SYSTEM_PLUGINS_DIR, USER_PLUGINS_DIR):
         if not root_dir.exists():
             continue
-        for manifest_path in root_dir.rglob("manifest.json"):
+        for manifest_path in root_dir.rglob("*manifest.json"):
             try:
                 if manifest_path.is_symlink() or manifest_path.stat().st_size > 65536:
                     continue
@@ -180,7 +185,7 @@ def discover_valid_bar_widgets() -> dict[str, dict]:
                 continue
 
     # 2. Scan custom QML bar modules in ~/.config/omarchy/bar/modules
-    custom_modules_dir = Path.home() / ".config/omarchy/bar/modules"
+    custom_modules_dir = CONFIG_ROOT / "omarchy" / "bar" / "modules"
     if custom_modules_dir.exists():
         for qml_file in custom_modules_dir.glob("*.qml"):
             cid = qml_file.stem
@@ -358,6 +363,89 @@ def save_config(cfg: dict) -> None:
         except OSError:
             pass
         raise
+
+
+SECONDARY_SLOTS = ("bottomBar", "leftBar", "rightBar")
+LEGACY_SLOT_FLAGS = {
+    "bottomBar": "bottom-bar-off",
+    "leftBar": "left-bar-off",
+    "rightBar": "right-bar-off",
+}
+
+
+def save_visibility_state(state: dict) -> dict:
+    clean = {
+        "version": 1,
+        "bottomBar": bool(state.get("bottomBar", False)),
+        "leftBar": bool(state.get("leftBar", False)),
+        "rightBar": bool(state.get("rightBar", False)),
+    }
+    STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(STATE_DIR, 0o700)
+    except OSError:
+        pass
+    fd, tmp_path = tempfile.mkstemp(prefix=".visibility.json.", suffix=".tmp", dir=str(STATE_DIR))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(clean, fh, indent=2)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, VISIBILITY_JSON)
+        os.chmod(VISIBILITY_JSON, 0o600)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return clean
+
+
+def sync_visibility_state() -> dict:
+    had_legacy_auto = False
+    legacy_auto_marker = LEGACY_TOGGLES_DIR / "mc-4bars-auto-bar-off"
+    if legacy_auto_marker.is_file() and not legacy_auto_marker.is_symlink():
+        had_legacy_auto = True
+        try:
+            legacy_auto_marker.unlink()
+        except OSError:
+            pass
+
+    if VISIBILITY_JSON.is_file() and not VISIBILITY_JSON.is_symlink():
+        try:
+            if VISIBILITY_JSON.stat().st_size <= 16384:
+                raw = json.loads(VISIBILITY_JSON.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    return {
+                        "bottomBar": bool(raw.get("bottomBar", False)),
+                        "leftBar": bool(raw.get("leftBar", False)),
+                        "rightBar": bool(raw.get("rightBar", False)),
+                        "hadLegacyAutoBarOff": had_legacy_auto,
+                    }
+        except Exception:
+            pass
+
+    migrated = {}
+    for slot_key, flag_name in LEGACY_SLOT_FLAGS.items():
+        flag_path = LEGACY_TOGGLES_DIR / flag_name
+        is_set = flag_path.is_file() and not flag_path.is_symlink()
+        migrated[slot_key] = is_set
+        if is_set:
+            try:
+                flag_path.unlink()
+            except OSError:
+                pass
+
+    saved = save_visibility_state(migrated)
+    return {
+        "bottomBar": saved["bottomBar"],
+        "leftBar": saved["leftBar"],
+        "rightBar": saved["rightBar"],
+        "hadLegacyAutoBarOff": had_legacy_auto,
+    }
 
 
 def ensure_all_bars(cfg: dict) -> None:
@@ -1055,6 +1143,23 @@ def main() -> None:
     sub = args[0].lower()
     if sub in ("-h", "--help", "help"):
         print(__doc__.strip())
+        return
+
+    if sub == "sync-visibility":
+        print(json.dumps(sync_visibility_state()))
+        return
+
+    if sub == "write-visibility-stdin":
+        raw = sys.stdin.read(16385)
+        if not raw or len(raw) > 16384:
+            sys.exit("Invalid or oversized visibility payload on stdin.")
+        try:
+            data = json.loads(raw)
+        except Exception as exc:
+            sys.exit(f"Malformed visibility JSON on stdin: {exc}")
+        if not isinstance(data, dict):
+            sys.exit("Visibility state root must be a JSON object.")
+        save_visibility_state(data)
         return
 
     if sub in ("write-stdin", "write-stdin-reload-host", "write-stdin-reload-secondary", "write-stdin-reload-all"):

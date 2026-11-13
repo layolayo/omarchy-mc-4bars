@@ -28,16 +28,31 @@ Item {
 
   property string barKey: "bottomBar"
   property string defaultPosition: "bottom"
-  property string toggleFlag: "bottom-bar-off"
+  property bool fullscreenDesktop: false
   property var controller: null
 
   property bool barHidden: false
   property string home: Quickshell.env("HOME")
-  property string stateHome: home + "/.local/state"
-  property string omarchyConfigDir: home + "/.config/omarchy"
+  property string configHome: Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")
+  property string stateHome: Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")
+  property string omarchyConfigDir: configHome + "/omarchy"
 
   function omarchyBin(name) {
     return root.omarchyPath ? (root.omarchyPath + "/bin/" + name) : name
+  }
+
+  function safeSetProp(target, prop, value) {
+    if (!target) return
+    try {
+      if (prop in target) target[prop] = value
+    } catch (e) {}
+  }
+
+  function safeBindProp(target, prop, fn) {
+    if (!target || typeof fn !== "function") return
+    try {
+      if (prop in target) target[prop] = Qt.binding(fn)
+    } catch (e) {}
   }
   readonly property var fallbackBarConfig: ({
     position: root.defaultPosition,
@@ -91,6 +106,32 @@ Item {
   property bool tooltipShown: false
   property int tooltipRequest: 0
   property var activePopout: null
+  property var popoutCard: null
+
+  function popoutSectionOf(owner) {
+    for (var i = 0; i < moduleSlots.length; i++) {
+      var slot = moduleSlots[i]
+      if (slot && slot.activeItem === owner) return String(slot.region || "")
+    }
+    return ""
+  }
+
+  function notePopoutCard(card) {
+    popoutCard = card ? {
+      screen: String(card.screen || ""),
+      section: popoutSectionOf(activePopout),
+      x: Number(card.x) || 0,
+      y: Number(card.y) || 0,
+      width: Number(card.width) || 0,
+      height: Number(card.height) || 0
+    } : null
+  }
+
+  function popoutCardFor(owner) {
+    var card = popoutCard
+    if (!card || !card.section || card.section !== popoutSectionOf(owner)) return null
+    return { screen: card.screen, x: card.x, y: card.y, width: card.width, height: card.height }
+  }
 
   readonly property bool traySectionDragActive: !!barDragSource && !barDragSource.hostsTraySection
   readonly property bool traySectionPopoutOpen: {
@@ -158,7 +199,7 @@ Item {
   }
 
   function applyConfigObject(cfgObj) {
-    if (Util.isPlainObject(cfgObj)) {
+    if (BarModel.isPlainObject(cfgObj)) {
       root.barConfig = JSON.parse(JSON.stringify(cfgObj))
     } else {
       root.barConfig = fallbackBarConfig
@@ -173,7 +214,7 @@ Item {
     }
     try {
       var parsed = JSON.parse(raw)
-      if (Util.isPlainObject(parsed) && Util.isPlainObject(parsed[root.barKey])) {
+      if (BarModel.isPlainObject(parsed) && BarModel.isPlainObject(parsed[root.barKey])) {
         root.barConfig = parsed[root.barKey]
         return
       }
@@ -218,7 +259,7 @@ Item {
     if (!text) return "{}"
     try {
       var parsed = JSON.parse(text)
-      return Util.isPlainObject(parsed) ? JSON.stringify(parsed) : "{}"
+      return BarModel.isPlainObject(parsed) ? JSON.stringify(parsed) : "{}"
     } catch (e) {
       return "{}"
     }
@@ -246,9 +287,9 @@ Item {
     if (!raw) return null
     try {
       var parsed = JSON.parse(raw)
-      if (!Util.isPlainObject(parsed) || parsed.schemaVersion !== 1) return null
+      if (!BarModel.isPlainObject(parsed) || parsed.schemaVersion !== 1) return null
       if (String(parsed.id || "") !== id) return null
-      if (!Util.isPlainObject(parsed.entryPoints)) return null
+      if (!BarModel.isPlainObject(parsed.entryPoints)) return null
       for (var epKey in parsed.entryPoints) {
         if (!BarModel.isSafeEntryPoint(parsed.entryPoints[epKey])) {
           console.warn("io.github.layolayo.mc-4bars: rejected unsafe entryPoint '" + epKey + "' in " + id)
@@ -267,7 +308,7 @@ Item {
   }
 
   function pluginCloneMaySummon(manifest, requestedId) {
-    var metadata = manifest && Util.isPlainObject(manifest.omarchy) ? manifest.omarchy : null
+    var metadata = manifest && BarModel.isPlainObject(manifest.omarchy) ? manifest.omarchy : null
     var sourceId = metadata ? String(metadata.clonedFrom || "") : ""
     var allowed = {
       "omarchy.audio": ["omarchy.osd"],
@@ -396,7 +437,7 @@ Item {
     if (root._localServices[key]) return root._localServices[key]
     var m = manifest ? root.cloneManifestSnapshot(manifest) : root.localManifestFor(key)
     if (!m || !m.entryPoints || !BarModel.isSafeEntryPoint(m.entryPoints.service)) return null
-    var url = Util.fileUrl(m.__sourceDir + "/" + m.entryPoints.service)
+    var url = BarModel.fileUrl(m.__sourceDir + "/" + m.entryPoints.service)
     var comp = Qt.createComponent(url, Component.PreferSynchronous)
     function finalize() {
       if (comp.status !== Component.Ready) {
@@ -405,9 +446,9 @@ Item {
       }
       var inst = comp.createObject(null)
       if (!inst) return
-      if ("omarchyPath" in inst) inst.omarchyPath = root.omarchyPath
-      if ("shell" in inst) inst.shell = root.localShellFacadeFor(key)
-      if ("manifest" in inst) inst.manifest = root.cloneManifestSnapshot(m)
+      root.safeSetProp(inst, "omarchyPath", root.omarchyPath)
+      root.safeSetProp(inst, "shell", root.localShellFacadeFor(key))
+      root.safeSetProp(inst, "manifest", root.cloneManifestSnapshot(m))
       var next = ({})
       for (var sk in root._localServices) next[sk] = root._localServices[sk]
       next[key] = inst
@@ -415,8 +456,8 @@ Item {
       if (root._localShellFacades[key]) {
         root._localShellFacades[key]._serviceRevision += 1
       }
-      if (root._localPanels[key] && "service" in root._localPanels[key]) {
-        root._localPanels[key].service = inst
+      if (root._localPanels[key]) {
+        root.safeSetProp(root._localPanels[key], "service", inst)
       }
       for (var ms = 0; ms < root.moduleSlots.length; ms++) {
         var slot = root.moduleSlots[ms]
@@ -468,7 +509,7 @@ Item {
     if (root._localPanels[key]) return root._localPanels[key]
     var m = root.localManifestFor(key)
     if (!m || !m.entryPoints || !BarModel.isSafeEntryPoint(m.entryPoints.panel)) return null
-    var url = Util.fileUrl(m.__sourceDir + "/" + m.entryPoints.panel)
+    var url = BarModel.fileUrl(m.__sourceDir + "/" + m.entryPoints.panel)
     var comp = Qt.createComponent(url, Component.PreferSynchronous)
     if (comp.status !== Component.Ready) {
       console.warn("io.github.layolayo.mc-4bars: panel load failed for " + key + ": " + comp.errorString())
@@ -477,11 +518,11 @@ Item {
     var inst = comp.createObject(null)
     if (!inst) return null
     var panelApiId = "bar-entry:" + key
-    if ("omarchyPath" in inst) inst.omarchyPath = root.omarchyPath
-    if ("bar" in inst) inst.bar = root.pluginBarApiFor(panelApiId, key, false, false)
-    if ("shell" in inst) inst.shell = root.localShellFacadeFor(key)
-    if ("manifest" in inst) inst.manifest = root.cloneManifestSnapshot(m)
-    if ("service" in inst) inst.service = root._localServices[key] || root.ensureLocalService(key, m)
+    root.safeSetProp(inst, "omarchyPath", root.omarchyPath)
+    root.safeSetProp(inst, "bar", root.pluginBarApiFor(panelApiId, key, false, false))
+    root.safeSetProp(inst, "shell", root.localShellFacadeFor(key))
+    root.safeSetProp(inst, "manifest", root.cloneManifestSnapshot(m))
+    root.safeSetProp(inst, "service", root._localServices[key] || root.ensureLocalService(key, m))
     var next = ({})
     for (var pk in root._localPanels) next[pk] = root._localPanels[pk]
     next[key] = inst
@@ -552,7 +593,7 @@ Item {
 
   Component {
     id: pluginBarApiComponent
-    PluginBarApi { }
+    SecondaryBarApi { }
   }
 
   function publicLayoutConfig() {
@@ -561,20 +602,21 @@ Item {
 
   function bindPluginBarApi(api) {
     if (!api) return
-    api.foreground = Qt.binding(function() { return root.foreground })
-    api.barForeground = Qt.binding(function() { return root.barForeground })
-    api.background = Qt.binding(function() { return root.background })
-    api.urgent = Qt.binding(function() { return root.urgent })
-    api.fontFamily = Qt.binding(function() { return root.fontFamily })
-    api.position = Qt.binding(function() { return root.position })
-    api.vertical = Qt.binding(function() { return root.vertical })
-    api.barSize = Qt.binding(function() { return root.barSize })
-    api.transparent = Qt.binding(function() { return root.transparent })
-    api.foregroundAnimationEnabled = Qt.binding(function() { return root.foregroundAnimationEnabled })
-    api.centerSectionRevealHeld = Qt.binding(function() { return root.centerSectionRevealHeld })
-    api._centerHoverRevealSuppressed = Qt.binding(function() { return root.centerHoverRevealSuppressed })
-    api.traySectionDragActive = Qt.binding(function() { return root.traySectionDragActive })
-    api.traySectionPopoutOpen = Qt.binding(function() { return root.traySectionPopoutOpen })
+    root.safeBindProp(api, "foreground", function() { return root.foreground })
+    root.safeBindProp(api, "barForeground", function() { return root.barForeground })
+    root.safeBindProp(api, "background", function() { return root.background })
+    root.safeBindProp(api, "urgent", function() { return root.urgent })
+    root.safeBindProp(api, "fontFamily", function() { return root.fontFamily })
+    root.safeBindProp(api, "position", function() { return root.position })
+    root.safeBindProp(api, "vertical", function() { return root.vertical })
+    root.safeBindProp(api, "barSize", function() { return root.barSize })
+    root.safeBindProp(api, "barHidden", function() { return root.barHidden })
+    root.safeBindProp(api, "transparent", function() { return root.transparent })
+    root.safeBindProp(api, "foregroundAnimationEnabled", function() { return root.foregroundAnimationEnabled })
+    root.safeBindProp(api, "centerSectionRevealHeld", function() { return root.centerSectionRevealHeld })
+    root.safeBindProp(api, "_centerHoverRevealSuppressed", function() { return root.centerHoverRevealSuppressed })
+    root.safeBindProp(api, "traySectionDragActive", function() { return root.traySectionDragActive })
+    root.safeBindProp(api, "traySectionPopoutOpen", function() { return root.traySectionPopoutOpen })
     root.syncPluginBarApiObjects(api)
   }
 
@@ -686,12 +728,15 @@ Item {
       _unregisterClickTarget: function(target) { root.unregisterPluginClickTarget(key, target) },
       _requestPopout: function(owner) { root.requestPluginPopout(key, owner) },
       _releasePopout: function(owner) { root.releasePluginPopout(key, owner) },
+      _notePopoutCard: function(card) { root.notePopoutCard(card) },
+      _popoutCardFor: function(owner) { return root.popoutCardFor(owner) },
       _switchPanelFrom: function(owner, direction) { return root.switchPanelFrom(owner, direction) },
       _targetBelongsToWindow: function(target, window) { return root.targetBelongsToWindow(target, window) },
       _moduleWidgets: function(requestedId) {
         return String(requestedId || "") === String(moduleName || "")
           ? root.moduleWidgets(moduleName) : []
       },
+      _barSizeFor: function(screenName) { return root.barSizeFor(screenName) },
       _run: firstParty === true
         ? function(command) { root.run(command) } : null,
       _setCenterHoverRevealSuppressed: function(value) {
@@ -906,8 +951,8 @@ Item {
   }
 
   function nearestScreenEdge(point, screen) {
-    var nx = screen.width > 0 ? Util.clamp(point.x / screen.width, 0, 1) : 0.5
-    var ny = screen.height > 0 ? Util.clamp(point.y / screen.height, 0, 1) : 0.5
+    var nx = screen.width > 0 ? BarModel.clamp(point.x / screen.width, 0, 1) : 0.5
+    var ny = screen.height > 0 ? BarModel.clamp(point.y / screen.height, 0, 1) : 0.5
 
     var edge = "top"
     var best = ny
@@ -1028,7 +1073,7 @@ Item {
   }
 
   function normalizeLayout(layout) {
-    var normalized = Util.normalizeLayout(Util.isPlainObject(layout) ? layout : fallbackBarConfig.layout)
+    var normalized = BarModel.normalizeLayout(BarModel.isPlainObject(layout) ? layout : fallbackBarConfig.layout)
     var mergedCenter = [].concat(
       Array.isArray(normalized.centerBegin) ? normalized.centerBegin : [],
       Array.isArray(normalized.center) ? normalized.center : [],
@@ -1047,13 +1092,13 @@ Item {
   }
 
   function applyBarConfig() {
-    var config = Util.isPlainObject(barConfig) && Object.keys(barConfig).length > 0 ? barConfig : fallbackBarConfig
+    var config = BarModel.isPlainObject(barConfig) && Object.keys(barConfig).length > 0 ? barConfig : fallbackBarConfig
 
     position = normalizePosition(config.position)
     var look = config.background || (config.transparent === true ? "none" : "none")
     setRequestedTransparency(look === "none")
     if (look !== "none") glassy = look === "glassy"
-    centerAnchor = Util.canonicalWidgetId(config.centerAnchor || "")
+    centerAnchor = BarModel.canonicalWidgetId(config.centerAnchor || "")
 
     var next = normalizeLayout(config.layout)
     var delta = BarModel.inlineSettingsDelta(layoutConfig, next)
@@ -1075,8 +1120,7 @@ Item {
       for (var s = 0; s < moduleSlots.length; s++) {
         var slot = moduleSlots[s]
         if (!slot || slot.region !== change.region || slot.moduleName !== entryId(change.entry)) continue
-        var item = slot.activeItem
-        if (item && "settings" in item) item.settings = settings
+        root.safeSetProp(slot.activeItem, "settings", settings)
       }
     }
   }
@@ -1223,7 +1267,7 @@ Item {
   }
 
   function canonicalWidgetId(name) {
-    return Util.canonicalWidgetId(name)
+    return BarModel.canonicalWidgetId(name)
   }
 
   Component.onCompleted: reloadBottomBarConfig()
@@ -1255,7 +1299,7 @@ Item {
 
   function run(command) {
     if (!command) return
-    Util.execDetached(command)
+    Quickshell.execDetached(["/bin/bash", "-lc", command])
   }
 
   function cycleBackground() {
@@ -1267,7 +1311,7 @@ Item {
   }
 
   function rawBottomLayoutSection(bbar, region) {
-    if (!Util.isPlainObject(bbar.layout)) bbar.layout = {}
+    if (!BarModel.isPlainObject(bbar.layout)) bbar.layout = {}
     if (region === "center") {
       var cb = Array.isArray(bbar.layout.centerBegin) ? bbar.layout.centerBegin : []
       var c = Array.isArray(bbar.layout.center) ? bbar.layout.center : []
@@ -1485,7 +1529,7 @@ Item {
     var c = colorValue
     if (typeof c === "string") c = Qt.color(c)
     function hexChannel(value) {
-      var s = Math.round(Util.clamp(value, 0, 1) * 255).toString(16)
+      var s = Math.round(BarModel.clamp(value, 0, 1) * 255).toString(16)
       return s.length < 2 ? "0" + s : s
     }
     return "#" + hexChannel(c.r) + hexChannel(c.g) + hexChannel(c.b)
@@ -1639,99 +1683,8 @@ Item {
     onTriggered: if (!root.targetTooltipHovered(root.tooltipTarget)) root.hideTooltip(root.tooltipTarget)
   }
 
-  property bool fullscreenDesktop: false
   property int hyprFullscreenSerial: 0
   property double lastToggleMs: 0
-  property bool toggleWriteInFlight: false
-
-  Process {
-    id: barToggleWriteProc
-    property bool queuedState: false
-    property bool hasQueuedState: false
-    onExited: function() {
-      if (barToggleWriteProc.hasQueuedState) {
-        var nextHidden = barToggleWriteProc.queuedState
-        barToggleWriteProc.hasQueuedState = false
-        root.persistBarHiddenState(nextHidden)
-        return
-      }
-      root.toggleWriteInFlight = false
-    }
-  }
-
-  function persistBarHiddenState(hidden) {
-    if (barToggleWriteProc.running) {
-      barToggleWriteProc.queuedState = !!hidden
-      barToggleWriteProc.hasQueuedState = true
-      return
-    }
-    root.toggleWriteInFlight = true
-    barToggleWriteProc.command = [root.omarchyBin("omarchy-toggle"), root.toggleFlag, hidden ? "on" : "off"]
-    barToggleWriteProc.running = true
-  }
-
-  function requestBarHiddenProbe(force) {
-    if (!force && (root.toggleWriteInFlight || (Date.now() - root.lastToggleMs < 500))) {
-      return
-    }
-    if (barHiddenProbe.running) {
-      barHiddenProbe.rescanRequested = true
-    } else {
-      barHiddenProbe.running = true
-    }
-  }
-
-  function requestFullscreenDesktopProbe() {
-    if (fullscreenDesktopProbe.running) {
-      fullscreenDesktopProbe.rescanRequested = true
-    } else {
-      fullscreenDesktopProbe.running = true
-    }
-  }
-
-  Process {
-    id: barHiddenProbe
-    property bool rescanRequested: false
-    command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/" + root.toggleFlag]
-    running: true
-    onExited: function(exitCode) {
-      if (!root.toggleWriteInFlight && (Date.now() - root.lastToggleMs >= 500)) {
-        root.barHidden = (exitCode === 0)
-      }
-      if (barHiddenProbe.rescanRequested) {
-        barHiddenProbe.rescanRequested = false
-        barHiddenProbe.running = true
-      }
-    }
-  }
-
-  Process {
-    id: fullscreenDesktopProbe
-    property bool rescanRequested: false
-    command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
-    running: true
-    onExited: function(exitCode) {
-      root.fullscreenDesktop = (exitCode === 0)
-      if (fullscreenDesktopProbe.rescanRequested) {
-        fullscreenDesktopProbe.rescanRequested = false
-        fullscreenDesktopProbe.running = true
-      }
-    }
-  }
-
-  FileView {
-    path: root.home + "/.local/state/omarchy/toggles"
-    watchChanges: true
-    printErrors: false
-    onFileChanged: root.requestBarHiddenProbe(false)
-  }
-
-  FileView {
-    path: root.home + "/.local/state/omarchy/toggles/hypr"
-    watchChanges: true
-    printErrors: false
-    onFileChanged: root.requestFullscreenDesktopProbe()
-  }
 
   Timer {
     id: hyprRefreshFollowupTimer
@@ -1759,9 +1712,18 @@ Item {
     }
   }
 
+  function setBarHiddenMemory(hidden) {
+    root.lastToggleMs = Date.now()
+    root.barHidden = !!hidden
+  }
+
+  function persistVisibilityIfManaged() {
+    if (root.controller && typeof root.controller.persistSecondaryVisibility === "function") {
+      root.controller.persistSecondaryVisibility()
+    }
+  }
+
   function syncHiddenState() {
-    root.requestBarHiddenProbe(true)
-    root.requestFullscreenDesktopProbe()
     root.refreshHyprFullscreenState()
   }
 
@@ -1770,23 +1732,20 @@ Item {
     if (now - root.lastToggleMs < 150) {
       return root.barHidden ? "hidden" : "visible"
     }
-    root.lastToggleMs = now
-    root.barHidden = !root.barHidden
-    root.persistBarHiddenState(root.barHidden)
+    root.setBarHiddenMemory(!root.barHidden)
+    root.persistVisibilityIfManaged()
     return root.barHidden ? "hidden" : "visible"
   }
 
   function showBar() {
-    root.lastToggleMs = Date.now()
-    root.barHidden = false
-    root.persistBarHiddenState(false)
+    root.setBarHiddenMemory(false)
+    root.persistVisibilityIfManaged()
     return "visible"
   }
 
   function hideBar() {
-    root.lastToggleMs = Date.now()
-    root.barHidden = true
-    root.persistBarHiddenState(true)
+    root.setBarHiddenMemory(true)
+    root.persistVisibilityIfManaged()
     return "hidden"
   }
 
@@ -2440,11 +2399,13 @@ Item {
 
     required property var entry
     property string region: ""
+    readonly property string fixedEdge: BarModel.fixedEdgeForRegion(slot.region)
+    readonly property bool inTraySection: slot.region === "tray"
     readonly property string moduleName: root.entryId(entry)
     readonly property var localManifest: root.localManifestFor(moduleName)
     readonly property var moduleSettings: {
       var raw = root.entrySettings(entry)
-      var defaults = (localManifest && localManifest.barWidget && Util.isPlainObject(localManifest.barWidget.defaults))
+      var defaults = (localManifest && localManifest.barWidget && BarModel.isPlainObject(localManifest.barWidget.defaults))
         ? localManifest.barWidget.defaults : {}
       var merged = {}
       for (var dk in defaults) merged[dk] = defaults[dk]
@@ -2466,7 +2427,7 @@ Item {
     readonly property string localWidgetUrl: {
       if (registered) return ""
       if (localManifest && localManifest.entryPoints && BarModel.isSafeEntryPoint(localManifest.entryPoints.barWidget)) {
-        return Util.fileUrl(localManifest.__sourceDir + "/" + localManifest.entryPoints.barWidget)
+        return BarModel.fileUrl(localManifest.__sourceDir + "/" + localManifest.entryPoints.barWidget)
       }
       return ""
     }
@@ -2693,14 +2654,21 @@ Item {
 
     onActiveItemChanged: Qt.callLater(injectProps)
     onModuleSettingsChanged: injectProps()
+    onRegionChanged: injectProps()
 
     function injectProps() {
       var target = activeItem
       if (!target) return
-      if ("bar" in target) target.bar = root.pluginBarApiFor(pluginApiId, moduleName, registered, firstParty)
-      if ("shell" in target && !firstParty) target.shell = root.localShellFacadeFor(moduleName)
-      if ("moduleName" in target) target.moduleName = moduleName
-      if ("settings" in target) target.settings = moduleSettings
+      root.safeSetProp(target, "fixedEdge", slot.fixedEdge)
+      root.safeSetProp(target, "inTraySection", slot.inTraySection)
+      root.safeSetProp(target, "bar", root.pluginBarApiFor(pluginApiId, moduleName, registered, firstParty))
+      if (!firstParty) {
+        root.safeSetProp(target, "shell", root.localShellFacadeFor(moduleName))
+        var localSvc = root._localServices[root.canonicalWidgetId(moduleName)]
+        if (localSvc) root.safeSetProp(target, "service", localSvc)
+      }
+      root.safeSetProp(target, "moduleName", moduleName)
+      root.safeSetProp(target, "settings", moduleSettings)
     }
   }
 }

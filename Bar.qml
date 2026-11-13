@@ -15,11 +15,17 @@ Item {
   property var manifest: null
 
   property string home: Quickshell.env("HOME")
-  property string omarchyConfigDir: home + "/.config/omarchy"
+  property string configHome: Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")
+  property string stateHome: Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")
+  property string omarchyConfigDir: configHome + "/omarchy"
   property string lastPrimaryEdge: ""
   property bool suppressSwapWatch: false
   property double lastGlobalToggleMs: 0
   property var cachedConfig: null
+  property bool primaryBarFlagHidden: false
+  property bool primaryFullscreenDesktop: false
+  property bool visibilityWriteInFlight: false
+  property string queuedVisibilityPayload: ""
 
   readonly property var secondaryBars: [bottomBarInstance, leftBarInstance, rightBarInstance]
 
@@ -27,7 +33,7 @@ Item {
     id: bottomBarInstance
     barKey: "bottomBar"
     defaultPosition: "bottom"
-    toggleFlag: "bottom-bar-off"
+    fullscreenDesktop: root.primaryFullscreenDesktop
     controller: root
     omarchyPath: root.omarchyPath
     barWidgetRegistry: root.barWidgetRegistry
@@ -40,7 +46,7 @@ Item {
     id: leftBarInstance
     barKey: "leftBar"
     defaultPosition: "left"
-    toggleFlag: "left-bar-off"
+    fullscreenDesktop: root.primaryFullscreenDesktop
     controller: root
     omarchyPath: root.omarchyPath
     barWidgetRegistry: root.barWidgetRegistry
@@ -53,7 +59,7 @@ Item {
     id: rightBarInstance
     barKey: "rightBar"
     defaultPosition: "right"
-    toggleFlag: "right-bar-off"
+    fullscreenDesktop: root.primaryFullscreenDesktop
     controller: root
     omarchyPath: root.omarchyPath
     barWidgetRegistry: root.barWidgetRegistry
@@ -128,7 +134,7 @@ Item {
     for (var i = 0; i < slots.length; i++) {
       var key = slots[i]
       var defPos = defaultPositionFor(key)
-      if (!Util.isPlainObject(config[key])) {
+      if (!BarModel.isPlainObject(config[key])) {
         config[key] = {
           position: defPos,
           background: "none",
@@ -137,7 +143,7 @@ Item {
       }
       var pos = BarModel.normalizePosition(config[key].position || defPos)
       config[key].position = pos
-      if (!Util.isPlainObject(config[key].layout)) {
+      if (!BarModel.isPlainObject(config[key].layout)) {
         config[key].layout = { left: [], center: [], right: [] }
       }
     }
@@ -150,7 +156,7 @@ Item {
     var used = ({})
     for (var i = 0; i < slots.length; i++) {
       var k = slots[i]
-      if (Util.isPlainObject(config[k])) {
+      if (BarModel.isPlainObject(config[k])) {
         var pos = BarModel.normalizePosition(config[k].position || defaultPositionFor(k))
         used[pos] = true
       }
@@ -165,7 +171,7 @@ Item {
     id: hostReloadTimer
     interval: 80
     repeat: false
-    onTriggered: Util.execArgv([root.omarchyBin("omarchy-shell"), "-q", "shell", "reloadConfig"])
+    onTriggered: Quickshell.execDetached([root.omarchyBin("omarchy-shell"), "-q", "shell", "reloadConfig"])
   }
 
   function readCurrentConfig() {
@@ -173,20 +179,20 @@ Item {
     if (raw) {
       try {
         var parsed = JSON.parse(raw)
-        if (Util.isPlainObject(parsed)) return ensureAllBarSlots(parsed)
+        if (BarModel.isPlainObject(parsed)) return ensureAllBarSlots(parsed)
       } catch (e) {}
     }
-    if (Util.isPlainObject(root.cachedConfig)) {
+    if (BarModel.isPlainObject(root.cachedConfig)) {
       return ensureAllBarSlots(JSON.parse(JSON.stringify(root.cachedConfig)))
     }
     return null
   }
 
   function applyConfigToSecondaryBars(config) {
-    if (!Util.isPlainObject(config)) return
+    if (!BarModel.isPlainObject(config)) return
     for (var i = 0; i < secondaryBars.length; i++) {
       var sbar = secondaryBars[i]
-      if (sbar && Util.isPlainObject(config[sbar.barKey])) {
+      if (sbar && BarModel.isPlainObject(config[sbar.barKey])) {
         sbar.applyConfigObject(config[sbar.barKey])
       }
     }
@@ -207,7 +213,7 @@ Item {
     if (!raw) return
     try {
       var config = JSON.parse(raw)
-      if (!Util.isPlainObject(config)) return
+      if (!BarModel.isPlainObject(config)) return
       ensureAllBarSlots(config)
 
       // Only if the Primary Bar ('bar') was moved directly onto a secondary bar's edge
@@ -248,7 +254,7 @@ Item {
   function mutateBarSlot(slotKey, mutator) {
     if (typeof mutator !== "function") return false
     var config = readCurrentConfig()
-    if (!config || !Util.isPlainObject(config[slotKey])) return false
+    if (!config || !BarModel.isPlainObject(config[slotKey])) return false
     mutator(config[slotKey])
     persistAndApplyConfig(config, slotKey === "bar")
     return true
@@ -265,7 +271,7 @@ Item {
   function moveOrSwapBar(sourceBarKey, targetEdgeRaw) {
     var targetEdge = BarModel.normalizePosition(targetEdgeRaw)
     var config = readCurrentConfig()
-    if (!config || !Util.isPlainObject(config[sourceBarKey])) return "error"
+    if (!config || !BarModel.isPlainObject(config[sourceBarKey])) return "error"
     try {
       var sourceEdge = BarModel.normalizePosition(config[sourceBarKey].position || defaultPositionFor(sourceBarKey))
       if (sourceEdge === targetEdge) return "unchanged"
@@ -328,6 +334,86 @@ Item {
     return null
   }
 
+  Process {
+    id: visibilityWriterProc
+    property string payload: ""
+    stdinEnabled: true
+    onStarted: {
+      write(payload)
+      stdinEnabled = false
+    }
+    onExited: function() {
+      if (root.queuedVisibilityPayload !== "") {
+        var nextPayload = root.queuedVisibilityPayload
+        root.queuedVisibilityPayload = ""
+        root.dispatchVisibilityWrite(nextPayload)
+        return
+      }
+      root.visibilityWriteInFlight = false
+    }
+  }
+
+  function dispatchVisibilityWrite(payloadText) {
+    if (!payloadText) return
+    if (visibilityWriterProc.running) {
+      root.queuedVisibilityPayload = payloadText
+      return
+    }
+    root.visibilityWriteInFlight = true
+    visibilityWriterProc.payload = payloadText
+    visibilityWriterProc.command = ["/usr/bin/python3", root.helperBinPath, "write-visibility-stdin"]
+    visibilityWriterProc.stdinEnabled = true
+    visibilityWriterProc.running = true
+  }
+
+  function persistSecondaryVisibility() {
+    var state = {
+      bottomBar: bottomBarInstance.barHidden === true,
+      leftBar: leftBarInstance.barHidden === true,
+      rightBar: rightBarInstance.barHidden === true
+    }
+    root.dispatchVisibilityWrite(JSON.stringify(state) + "\n")
+  }
+
+  Process {
+    id: visibilitySyncProc
+    property bool rescanRequested: false
+    command: ["/usr/bin/python3", root.helperBinPath, "sync-visibility"]
+    running: true
+    stdout: SplitParser {
+      onRead: function(line) {
+        var text = String(line || "").trim()
+        if (!text) return
+        try {
+          var parsed = JSON.parse(text)
+          if (!BarModel.isPlainObject(parsed)) return
+          if (!root.visibilityWriteInFlight) {
+            bottomBarInstance.barHidden = parsed.bottomBar === true
+            leftBarInstance.barHidden = parsed.leftBar === true
+            rightBarInstance.barHidden = parsed.rightBar === true
+          }
+          if (parsed.hadLegacyAutoBarOff === true && !root.primaryFullscreenDesktop) {
+            Quickshell.execDetached([root.omarchyBin("omarchy-toggle-bar"), "off"])
+          }
+        } catch (e) {}
+      }
+    }
+    onExited: function() {
+      if (visibilitySyncProc.rescanRequested) {
+        visibilitySyncProc.rescanRequested = false
+        visibilitySyncProc.running = true
+      }
+    }
+  }
+
+  function requestSecondaryVisibilitySync() {
+    if (visibilitySyncProc.running) {
+      visibilitySyncProc.rescanRequested = true
+    } else {
+      visibilitySyncProc.running = true
+    }
+  }
+
   function toggleEdgeVisibility(edgeRaw) {
     var edge = BarModel.normalizePosition(edgeRaw)
     var sbar = secondaryBarAtEdge(edge)
@@ -335,7 +421,7 @@ Item {
       return sbar.toggleBarVisibility()
     }
     if (root.lastPrimaryEdge === edge || edge === "top") {
-      Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "toggle"])
+      Quickshell.execDetached([root.omarchyBin("omarchy-toggle-bar"), "toggle"])
       return "toggled-primary"
     }
     return "empty"
@@ -346,7 +432,7 @@ Item {
     var sbar = secondaryBarAtEdge(edge)
     if (sbar) return sbar.showBar()
     if (root.lastPrimaryEdge === edge || edge === "top") {
-      Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "off"])
+      Quickshell.execDetached([root.omarchyBin("omarchy-toggle-bar"), "off"])
       return "visible"
     }
     return "empty"
@@ -357,7 +443,7 @@ Item {
     var sbar = secondaryBarAtEdge(edge)
     if (sbar) return sbar.hideBar()
     if (root.lastPrimaryEdge === edge || edge === "top") {
-      Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "on"])
+      Quickshell.execDetached([root.omarchyBin("omarchy-toggle-bar"), "on"])
       return "hidden"
     }
     return "empty"
@@ -385,39 +471,42 @@ Item {
       }
     }
     for (var k = 0; k < populated.length; k++) {
-      if (anyVisible) populated[k].hideBar()
-      else populated[k].showBar()
+      populated[k].setBarHiddenMemory(anyVisible)
     }
+    root.persistSecondaryVisibility()
     if (!anyVisible && root.primaryBarFlagHidden && !root.primaryFullscreenDesktop) {
-      Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "off"])
+      Quickshell.execDetached([root.omarchyBin("omarchy-toggle-bar"), "off"])
     }
     return anyVisible ? "hidden" : "visible"
   }
 
   function showAllSecondaryBars() {
     if (root.primaryBarFlagHidden && !root.primaryFullscreenDesktop) {
-      Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "off"])
+      Quickshell.execDetached([root.omarchyBin("omarchy-toggle-bar"), "off"])
     }
     for (var i = 0; i < secondaryBars.length; i++) {
       if (secondaryBars[i].hasWidgets || secondaryBars[i] === bottomBarInstance) {
-        secondaryBars[i].showBar()
+        secondaryBars[i].setBarHiddenMemory(false)
       }
     }
+    root.persistSecondaryVisibility()
     return "visible"
   }
 
   function hideAllSecondaryBars() {
     for (var i = 0; i < secondaryBars.length; i++) {
       if (secondaryBars[i].hasWidgets || secondaryBars[i] === bottomBarInstance) {
-        secondaryBars[i].hideBar()
+        secondaryBars[i].setBarHiddenMemory(true)
       }
     }
+    root.persistSecondaryVisibility()
     return "hidden"
   }
 
   function syncAllHiddenStates() {
     root.requestPrimaryBarHiddenProbe()
     root.requestPrimaryFullscreenDesktopProbe()
+    root.requestSecondaryVisibilitySync()
     for (var i = 0; i < secondaryBars.length; i++) {
       secondaryBars[i].syncHiddenState()
     }
@@ -439,36 +528,14 @@ Item {
     }
   }
 
-  property bool primaryBarFlagHidden: false
-  property bool primaryFullscreenDesktop: false
-
   function omarchyBin(name) {
     return root.omarchyPath ? (root.omarchyPath + "/bin/" + name) : name
-  }
-
-  // Clean up any legacy mc-4bars-auto-bar-off state marker that may have
-  // stranded bar-off on disk across a shell reload or system update.
-  // Upstream Omarchy's primary bar already handles fullscreen windows
-  // natively in memory (underFullscreen), and omarchy-toggle-fullscreen-desktop
-  // toggles bar-off directly.
-  Process {
-    id: legacyAutoHideCleanupProbe
-    command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/mc-4bars-auto-bar-off"]
-    running: true
-    onExited: function(exitCode) {
-      if (exitCode === 0) {
-        Util.execArgv([root.omarchyBin("omarchy-toggle"), "mc-4bars-auto-bar-off", "off"])
-        if (!root.primaryFullscreenDesktop) {
-          Util.execArgv([root.omarchyBin("omarchy-toggle-bar"), "off"])
-        }
-      }
-    }
   }
 
   Process {
     id: primaryBarHiddenProbe
     property bool rescanRequested: false
-    command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/bar-off"]
+    command: ["/usr/bin/test", "-f", root.stateHome + "/omarchy/toggles/bar-off"]
     running: true
     onExited: function(exitCode) {
       root.primaryBarFlagHidden = (exitCode === 0)
@@ -482,7 +549,7 @@ Item {
   Process {
     id: primaryFullscreenDesktopProbe
     property bool rescanRequested: false
-    command: ["/usr/bin/test", "-f", root.home + "/.local/state/omarchy/toggles/hypr/window-no-gaps.lua"]
+    command: ["/usr/bin/test", "-f", root.stateHome + "/omarchy/toggles/hypr/window-no-gaps.lua"]
     running: true
     onExited: function(exitCode) {
       root.primaryFullscreenDesktop = (exitCode === 0)
@@ -494,14 +561,14 @@ Item {
   }
 
   FileView {
-    path: root.home + "/.local/state/omarchy/toggles"
+    path: root.stateHome + "/omarchy/toggles"
     watchChanges: true
     printErrors: false
     onFileChanged: root.requestPrimaryBarHiddenProbe()
   }
 
   FileView {
-    path: root.home + "/.local/state/omarchy/toggles/hypr"
+    path: root.stateHome + "/omarchy/toggles/hypr"
     watchChanges: true
     printErrors: false
     onFileChanged: root.requestPrimaryFullscreenDesktopProbe()

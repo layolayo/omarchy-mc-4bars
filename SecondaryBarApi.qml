@@ -1,0 +1,109 @@
+import QtQuick
+
+// Self-contained userspace bar facade injected into widgets and panels hosted
+// on MC 4Bars secondary bars. Owned by this plugin rather than imported from
+// system-level qs.Ui/PluginBarApi.qml so upstream Omarchy refactors cannot
+// break property bindings or throw runtime exceptions.
+QtObject {
+  id: api
+
+  required property string pluginId
+  required property string moduleName
+  property var shell: null
+
+  property color foreground: "transparent"
+  property color barForeground: "transparent"
+  property color background: "transparent"
+  property color urgent: "transparent"
+  property string fontFamily: ""
+  property string position: "bottom"
+  property bool vertical: false
+  property int barSize: 0
+  property bool barHidden: false
+  property bool transparent: false
+  property bool foregroundAnimationEnabled: true
+  property bool traySectionDragActive: false
+  property bool traySectionPopoutOpen: false
+
+  // Preserved for backwards compatibility with third-party widgets built
+  // against earlier Omarchy 4 revisions.
+  property bool centerSectionRevealHeld: false
+  property bool _centerHoverRevealSuppressed: false
+  readonly property bool centerHoverRevealSuppressed: _centerHoverRevealSuppressed
+
+  property var activePopout: null
+  property var clickTargets: []
+  property var layoutConfig: ({})
+  readonly property var foreignPopoutMarker: ({ foreign: true })
+
+  property var _showTooltip: null
+  property var _hideTooltip: null
+  property var _registerClickTarget: null
+  property var _unregisterClickTarget: null
+  property var _requestPopout: null
+  property var _releasePopout: null
+  property var _notePopoutCard: null
+  property var _popoutCardFor: null
+  property var _switchPanelFrom: null
+  property var _targetBelongsToWindow: null
+  property var _moduleWidgets: null
+  property var _barSizeFor: null
+  property var _run: null
+  property var _setCenterHoverRevealSuppressed: null
+
+  function showTooltip(target, text) {
+    if (_showTooltip) _showTooltip(target, String(text || ""))
+  }
+
+  function hideTooltip(target) {
+    if (_hideTooltip) _hideTooltip(target)
+  }
+
+  function registerClickTarget(target) {
+    if (_registerClickTarget) _registerClickTarget(target)
+  }
+
+  function unregisterClickTarget(target) {
+    if (_unregisterClickTarget) _unregisterClickTarget(target)
+  }
+
+  function requestPopout(owner) {
+    if (_requestPopout) _requestPopout(owner)
+  }
+
+  function releasePopout(owner) {
+    if (_releasePopout) _releasePopout(owner)
+  }
+
+  function notePopoutCard(card) {
+    if (_notePopoutCard) _notePopoutCard(card)
+  }
+
+  function popoutCardFor(owner) {
+    return _popoutCardFor ? _popoutCardFor(owner) : null
+  }
+
+  function switchPanelFrom(owner, direction) {
+    return _switchPanelFrom ? _switchPanelFrom(owner, direction) : false
+  }
+
+  function targetBelongsToWindow(target, window) {
+    return _targetBelongsToWindow ? _targetBelongsToWindow(target, window) : false
+  }
+
+  function moduleWidgets(id) {
+    return _moduleWidgets ? _moduleWidgets(String(id || "")) : []
+  }
+
+  function barSizeFor(screenName) {
+    return _barSizeFor ? _barSizeFor(String(screenName || "")) : barSize
+  }
+
+  function run(command) {
+    if (_run) _run(String(command || ""))
+  }
+
+  function setCenterHoverRevealSuppressed(value) {
+    if (_setCenterHoverRevealSuppressed) _setCenterHoverRevealSuppressed(!!value)
+  }
+}
