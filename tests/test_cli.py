@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Userspace CLI, layout mutation, and visibility migration tests for MC 4Bars."""
 
+import importlib.machinery
+import importlib.util
 import json
 import os
 import stat
@@ -204,6 +206,54 @@ class Mc4BarsCliTests(unittest.TestCase):
         res_list = self.run_cli("list")
         self.assertEqual(res_list.returncode, 0, res_list.stderr)
         self.assertIn("Left Bar", res_list.stdout)
+
+    def _load_cli_module(self):
+        loader = importlib.machinery.SourceFileLoader("omarchy_mc_4bars_mod", str(CLI_BIN))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        mod.SHELL_JSON = self.shell_json
+        return mod
+
+    def test_tui_mutations_reload_fresh_shell_json_and_preserve_external_plugin_disable(self):
+        # Seed shell.json with a separate service enabled in plugins[]
+        cfg = json.loads(self.shell_json.read_text(encoding="utf-8"))
+        cfg["plugins"] = [
+            {"id": "io.github.layolayo.mc-4bars"},
+            {"id": "other.background-service"},
+        ]
+        self.shell_json.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+
+        mod = self._load_cli_module()
+        # Simulate the TUI reading shell.json before blocking on getch()
+        stale_cfg = mod.load_config()
+        self.assertEqual(len(stale_cfg["plugins"]), 2)
+
+        # While TUI waits for input, Omarchy disables other.background-service
+        external_cfg = json.loads(self.shell_json.read_text(encoding="utf-8"))
+        external_cfg["plugins"] = [{"id": "io.github.layolayo.mc-4bars"}]
+        self.shell_json.write_text(json.dumps(external_cfg, indent=2) + "\n", encoding="utf-8")
+
+        # User presses 'g' on Top tab to cycle background: must NOT restore other.background-service
+        nxt_bg = mod.tui_cycle_background("bar")
+        self.assertEqual(nxt_bg, "none")
+
+        saved = json.loads(self.shell_json.read_text(encoding="utf-8"))
+        self.assertEqual(saved["bar"]["background"], "none")
+        self.assertEqual(saved["plugins"], [{"id": "io.github.layolayo.mc-4bars"}])
+
+        # Also verify TUI remove and move preserve external shell.json changes
+        ok_move, _detail = mod.tui_move_widget_section("bar", "omarchy.workspaces", "right")
+        self.assertTrue(ok_move)
+        saved2 = json.loads(self.shell_json.read_text(encoding="utf-8"))
+        self.assertEqual(saved2["plugins"], [{"id": "io.github.layolayo.mc-4bars"}])
+        self.assertIn("omarchy.workspaces", saved2["bar"]["layout"]["right"])
+
+        ok_rm = mod.tui_remove_widget("bar", "omarchy.workspaces")
+        self.assertTrue(ok_rm)
+        saved3 = json.loads(self.shell_json.read_text(encoding="utf-8"))
+        self.assertEqual(saved3["plugins"], [{"id": "io.github.layolayo.mc-4bars"}])
+        self.assertNotIn("omarchy.workspaces", saved3["bar"]["layout"]["right"])
 
 
 if __name__ == "__main__":

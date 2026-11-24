@@ -103,6 +103,42 @@ function runTests() {
   assert.strictEqual(BarModel.barSizeFor({ "eDP-1": 34 }, "eDP-1", 28), 34);
   assert.strictEqual(BarModel.barSizeFor({ "eDP-1": 34 }, "DP-2", 28), 28);
 
+  // 8. Stock plugin enabled-state checks
+  const stockCfg = {
+    plugins: [{ id: "thirdparty.svc" }, "thirdparty.str", { id: "thirdparty.off", enabled: false }],
+    disabledPlugins: ["thirdparty.disabled"],
+    bar: {
+      id: "thirdparty.bar",
+      layout: {
+        left: ["thirdparty.onprimary"],
+        centerBegin: ["thirdparty.cb"],
+        center: ["omarchy.clock"],
+        centerEnd: ["thirdparty.ce"],
+        right: ["thirdparty.disabled"],
+        tray: ["thirdparty.tray"]
+      }
+    },
+    bottomBar: {
+      layout: {
+        left: [],
+        center: ["thirdparty.secondaryonly"],
+        right: [],
+        tray: []
+      }
+    }
+  };
+  assert.strictEqual(BarModel.isPluginStockEnabled(stockCfg, "thirdparty.svc"), true);
+  assert.strictEqual(BarModel.isPluginStockEnabled(stockCfg, "thirdparty.str"), true);
+  assert.strictEqual(BarModel.isPluginStockEnabled(stockCfg, "thirdparty.off"), false);
+  assert.strictEqual(BarModel.isPluginStockEnabled(stockCfg, "thirdparty.disabled"), false);
+  assert.strictEqual(BarModel.isPluginStockEnabled(stockCfg, "thirdparty.bar"), true);
+  assert.strictEqual(BarModel.isPluginStockEnabled(stockCfg, "thirdparty.onprimary"), true);
+  assert.strictEqual(BarModel.isPluginStockEnabled(stockCfg, "thirdparty.cb"), true);
+  assert.strictEqual(BarModel.isPluginStockEnabled(stockCfg, "thirdparty.ce"), true);
+  assert.strictEqual(BarModel.isPluginStockEnabled(stockCfg, "thirdparty.tray"), true);
+  assert.strictEqual(BarModel.isPluginStockEnabled(stockCfg, "thirdparty.secondaryonly"), false);
+  assert.strictEqual(BarModel.isPluginStockEnabled(null, "thirdparty.svc"), false);
+
   console.log("PASS: BarModel.js unit tests (all assertions succeeded)");
 }
 

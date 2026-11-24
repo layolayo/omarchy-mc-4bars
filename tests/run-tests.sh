@@ -258,7 +258,10 @@ EOF
 
 cat > "$WL_CONFIG/omarchy/shell.json" <<'EOF'
 {
-  "enabledPlugins": ["io.github.layolayo.mc-4bars", "test.thirdparty.demo"],
+  "plugins": [
+    { "id": "io.github.layolayo.mc-4bars" },
+    { "id": "test.thirdparty.demo" }
+  ],
   "bar": {
     "position": "top",
     "background": "opaque",
@@ -408,15 +411,27 @@ ShellRoot {
   }
 
   Timer {
-    interval: 900
+    id: verifyTimer
+    property int attempts: 0
+    interval: 300
     running: true
-    repeat: false
+    repeat: true
     onTriggered: {
+      attempts++
+      var bottomBar = coordinator.secondaryBars[0]
+      var leftBar = coordinator.secondaryBars[1]
+      var screenCount = Quickshell.screens ? Quickshell.screens.length : 0
+      var ready = (leftBar.barHidden === true)
+        && (screenCount === 0 || (
+          bottomBar.moduleWidgets("firstparty.sample").length > 0
+          && bottomBar.moduleWidgets("test.thirdparty.demo").length > 0
+          && bottomBar.moduleWidgets("firstparty.traychild").length > 0
+        ))
+      if (!ready && attempts < 12) return
+      verifyTimer.stop()
+
       var checks = {}
       try {
-        var bottomBar = coordinator.secondaryBars[0]
-        var leftBar = coordinator.secondaryBars[1]
-
         checks.leftMigratedHidden = (leftBar.barHidden === true)
 
         var testApi = bottomBar.pluginBarApiFor("test.thirdparty.demo", "test.thirdparty.demo", false, false)
@@ -425,7 +440,6 @@ ShellRoot {
         checks.apiHasLegacyProps = (testApi && ("centerSectionRevealHeld" in testApi) && ("centerHoverRevealSuppressed" in testApi))
         checks.apiHasCurrentMethods = (testApi && typeof testApi.notePopoutCard === "function" && typeof testApi.popoutCardFor === "function")
 
-        var screenCount = Quickshell.screens ? Quickshell.screens.length : 0
         checks.screenCount = screenCount
 
         if (screenCount > 0) {
@@ -450,6 +464,16 @@ ShellRoot {
             checks.demoPopoutContract = dw.exercisePopoutContract()
           }
         }
+
+        // Verify disabling test.thirdparty.demo in stock shell.json destroys its local
+        // service and prevents recreation even while retained in bottomBar.layout.center
+        var disabledCfg = JSON.parse(JSON.stringify(coordinator.cachedConfig || {}))
+        disabledCfg.plugins = [{ id: "io.github.layolayo.mc-4bars" }]
+        coordinator.applyConfigToSecondaryBars(disabledCfg)
+        checks.disabledServiceDestroyed = !bottomBar._localServices["test.thirdparty.demo"]
+        checks.disabledServiceNotRecreated = (bottomBar.ensureLocalService("test.thirdparty.demo", null) === null)
+        var disabledFacade = bottomBar.localShellFacadeFor("test.thirdparty.demo")
+        checks.disabledFacadeReturnsNull = (!disabledFacade || disabledFacade.serviceFor("test.thirdparty.demo") === null)
 
         // Persist hide state to isolated visibility.json
         var hideRes = coordinator.hideEdgeVisibility("bottom")
@@ -505,7 +529,7 @@ XDG_STATE_HOME="$WL_STATE" \
 XDG_CACHE_HOME="$WL_CACHE" \
 XDG_RUNTIME_DIR="$ORIG_XDG_RUNTIME_DIR" \
 WAYLAND_DISPLAY="$ORIG_WAYLAND_DISPLAY" \
-HYPRLAND_INSTANCE_SIGNATURE="$ORIG_HYPRLAND_SIG" \
+HYPRLAND_INSTANCE_SIGNATURE="" \
 QML2_IMPORT_PATH="$OMARCHY_PATH/shell${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}" \
 QML_IMPORT_PATH="$OMARCHY_PATH/shell${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}" \
   /usr/bin/quickshell -p "$QS_DIR/shell.qml" --no-color >"$QS_LOG" 2>&1 || true

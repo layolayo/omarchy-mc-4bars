@@ -193,7 +193,7 @@ Item {
     for (var i = 0; i < secondaryBars.length; i++) {
       var sbar = secondaryBars[i]
       if (sbar && BarModel.isPlainObject(config[sbar.barKey])) {
-        sbar.applyConfigObject(config[sbar.barKey])
+        sbar.applyConfigObject(config[sbar.barKey], config)
       }
     }
   }

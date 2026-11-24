@@ -16,6 +16,8 @@ Item {
   property var barWidgetRegistry: fallbackBarWidgetRegistry
   property var pluginRegistry: null
   property var barConfig: ({})
+  property var shellConfigSnapshot: ({})
+  property int shellConfigRevision: 0
   property var shell: null
   property var manifest: null
 
@@ -198,30 +200,48 @@ Item {
     userShellConfigFile.reload()
   }
 
-  function applyConfigObject(cfgObj) {
+  function applyConfigObject(cfgObj, fullShellConfig) {
+    if (BarModel.isPlainObject(fullShellConfig)) {
+      root.shellConfigSnapshot = JSON.parse(JSON.stringify(fullShellConfig))
+      root.shellConfigRevision++
+    }
     if (BarModel.isPlainObject(cfgObj)) {
       root.barConfig = JSON.parse(JSON.stringify(cfgObj))
     } else {
       root.barConfig = fallbackBarConfig
     }
+    root.syncLocalPluginServices()
   }
 
   function reloadBottomBarConfig() {
     var raw = String(userShellConfigFile.text() || "").trim()
     if (!raw) {
+      root.shellConfigSnapshot = ({})
+      root.shellConfigRevision++
       root.barConfig = fallbackBarConfig
+      root.syncLocalPluginServices()
       return
     }
     try {
       var parsed = JSON.parse(raw)
-      if (BarModel.isPlainObject(parsed) && BarModel.isPlainObject(parsed[root.barKey])) {
-        root.barConfig = parsed[root.barKey]
+      if (BarModel.isPlainObject(parsed)) {
+        root.shellConfigSnapshot = parsed
+        root.shellConfigRevision++
+        if (BarModel.isPlainObject(parsed[root.barKey])) {
+          root.barConfig = parsed[root.barKey]
+        } else {
+          root.barConfig = fallbackBarConfig
+        }
+        root.syncLocalPluginServices()
         return
       }
     } catch (e) {
       console.warn("io.github.layolayo.mc-4bars: failed to parse shell.json:", e)
     }
+    root.shellConfigSnapshot = ({})
+    root.shellConfigRevision++
     root.barConfig = fallbackBarConfig
+    root.syncLocalPluginServices()
   }
 
   function mutateBottomBarConfig(mutator) {
@@ -389,11 +409,22 @@ Item {
       _serviceLookup: function(requestedId) {
         if (!owns(requestedId)) return null
         if (ownerKey === "io.github.layolayo.mc-4bars") return root.controller
-        return root._localServices[ownerKey] || root.ensureLocalService(ownerKey, root.localManifestFor(ownerKey))
+        if (!root.isThirdPartyPluginEnabled(ownerKey)) return null
+        if (root._localServices[ownerKey]) return root._localServices[ownerKey]
+        Qt.callLater(function() {
+          root.ensureLocalService(ownerKey, root.localManifestFor(ownerKey))
+        })
+        return null
       },
       _firstPartyServiceLookup: function(requestedId) {
         if (owns(requestedId)) {
-          return root._localServices[ownerKey] || root.ensureLocalService(ownerKey, root.localManifestFor(ownerKey))
+          if (ownerKey === "io.github.layolayo.mc-4bars") return root.controller
+          if (!root.isThirdPartyPluginEnabled(ownerKey)) return null
+          if (root._localServices[ownerKey]) return root._localServices[ownerKey]
+          Qt.callLater(function() {
+            root.ensureLocalService(ownerKey, root.localManifestFor(ownerKey))
+          })
+          return null
         }
         if (root.shell && typeof root.shell.firstPartyServiceFor === "function") {
           return root.shell.firstPartyServiceFor(requestedId)
@@ -431,15 +462,24 @@ Item {
     return facade
   }
 
+  function isThirdPartyPluginEnabled(pluginId) {
+    var key = root.canonicalWidgetId(String(pluginId || ""))
+    if (!BarModel.isSafePluginId(key) || key.indexOf("omarchy.") === 0) return false
+    return BarModel.isPluginStockEnabled(root.shellConfigSnapshot, key)
+  }
+
   function ensureLocalService(pluginId, manifest) {
     var key = root.canonicalWidgetId(String(pluginId || ""))
     if (!BarModel.isSafePluginId(key) || key.indexOf("omarchy.") === 0) return null
+    if (!root.isThirdPartyPluginEnabled(key)) return null
     if (root._localServices[key]) return root._localServices[key]
     var m = manifest ? root.cloneManifestSnapshot(manifest) : root.localManifestFor(key)
     if (!m || !m.entryPoints || !BarModel.isSafeEntryPoint(m.entryPoints.service)) return null
     var url = BarModel.fileUrl(m.__sourceDir + "/" + m.entryPoints.service)
     var comp = Qt.createComponent(url, Component.PreferSynchronous)
     function finalize() {
+      if (!root.isThirdPartyPluginEnabled(key)) return
+      if (root._localServices[key]) return
       if (comp.status !== Component.Ready) {
         console.warn("io.github.layolayo.mc-4bars: service load failed for " + key + ": " + comp.errorString())
         return
@@ -454,17 +494,22 @@ Item {
       next[key] = inst
       root._localServices = next
       if (root._localShellFacades[key]) {
-        root._localShellFacades[key]._serviceRevision += 1
+        var createdFacade = root._localShellFacades[key]
+        Qt.callLater(function() {
+          if (createdFacade) createdFacade._serviceRevision += 1
+        })
       }
       if (root._localPanels[key]) {
         root.safeSetProp(root._localPanels[key], "service", inst)
       }
-      for (var ms = 0; ms < root.moduleSlots.length; ms++) {
-        var slot = root.moduleSlots[ms]
-        if (slot && root.canonicalWidgetId(slot.moduleName) === key) {
-          slot.injectProps()
+      Qt.callLater(function() {
+        for (var ms = 0; ms < root.moduleSlots.length; ms++) {
+          var slot = root.moduleSlots[ms]
+          if (slot && root.canonicalWidgetId(slot.moduleName) === key) {
+            slot.injectProps()
+          }
         }
-      }
+      })
     }
     if (comp.status === Component.Loading) {
       comp.statusChanged.connect(finalize)
@@ -481,7 +526,7 @@ Item {
       var entries = (root.layoutConfig && Array.isArray(root.layoutConfig[regions[r]])) ? root.layoutConfig[regions[r]] : []
       for (var i = 0; i < entries.length; i++) {
         var id = root.canonicalWidgetId(root.entryId(entries[i]))
-        if (BarModel.isSafePluginId(id) && id.indexOf("omarchy.") !== 0) wanted[id] = true
+        if (root.isThirdPartyPluginEnabled(id)) wanted[id] = true
       }
     }
     for (var wantedId in wanted) {
@@ -498,14 +543,36 @@ Item {
       for (var k in root._localServices) if (k !== existingId) next[k] = root._localServices[k]
       root._localServices = next
       if (root._localShellFacades[existingId]) {
-        root._localShellFacades[existingId]._serviceRevision += 1
+        var removedFacade = root._localShellFacades[existingId]
+        Qt.callLater(function() {
+          if (removedFacade) removedFacade._serviceRevision += 1
+        })
       }
+      if (root._localPanels[existingId]) {
+        root.safeSetProp(root._localPanels[existingId], "service", null)
+      }
+      for (var ms = 0; ms < root.moduleSlots.length; ms++) {
+        var slot = root.moduleSlots[ms]
+        if (slot && root.canonicalWidgetId(slot.moduleName) === existingId) {
+          root.safeSetProp(slot.activeItem, "service", null)
+        }
+      }
+    }
+    for (var panelId in root._localPanels) {
+      if (root.isThirdPartyPluginEnabled(panelId)) continue
+      var panelInst = root._localPanels[panelId]
+      if (panelInst && typeof panelInst.close === "function") panelInst.close()
+      if (panelInst && typeof panelInst.destroy === "function") panelInst.destroy()
+      var nextPanels = ({})
+      for (var pk in root._localPanels) if (pk !== panelId) nextPanels[pk] = root._localPanels[pk]
+      root._localPanels = nextPanels
     }
   }
 
   function ensureLocalPanel(pluginId) {
     var key = root.canonicalWidgetId(String(pluginId || ""))
     if (!BarModel.isSafePluginId(key) || key.indexOf("omarchy.") === 0) return null
+    if (!root.isThirdPartyPluginEnabled(key)) return null
     if (root._localPanels[key]) return root._localPanels[key]
     var m = root.localManifestFor(key)
     if (!m || !m.entryPoints || !BarModel.isSafeEntryPoint(m.entryPoints.panel)) return null
@@ -2424,8 +2491,13 @@ Item {
       var registryName = root.canonicalWidgetId(moduleName)
       return w[registryName] ? w[registryName].component : null
     }
+    readonly property bool thirdPartyEnabled: {
+      var rev = root.shellConfigRevision
+      return root.isThirdPartyPluginEnabled(moduleName)
+    }
     readonly property string localWidgetUrl: {
       if (registered) return ""
+      if (!thirdPartyEnabled) return ""
       if (localManifest && localManifest.entryPoints && BarModel.isSafeEntryPoint(localManifest.entryPoints.barWidget)) {
         return BarModel.fileUrl(localManifest.__sourceDir + "/" + localManifest.entryPoints.barWidget)
       }
@@ -2664,8 +2736,10 @@ Item {
       root.safeSetProp(target, "bar", root.pluginBarApiFor(pluginApiId, moduleName, registered, firstParty))
       if (!firstParty) {
         root.safeSetProp(target, "shell", root.localShellFacadeFor(moduleName))
-        var localSvc = root._localServices[root.canonicalWidgetId(moduleName)]
-        if (localSvc) root.safeSetProp(target, "service", localSvc)
+        var localSvc = root.isThirdPartyPluginEnabled(moduleName)
+          ? (root._localServices[root.canonicalWidgetId(moduleName)] || null)
+          : null
+        root.safeSetProp(target, "service", localSvc)
       }
       root.safeSetProp(target, "moduleName", moduleName)
       root.safeSetProp(target, "settings", moduleSettings)

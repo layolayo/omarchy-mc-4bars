@@ -1,3 +1,31 @@
+/*
+ * Layout, geometry, and display-cutout helpers for MC 4Bars.
+ *
+ * Portions adapted from Omarchy (https://github.com/basecamp/omarchy),
+ * licensed under the MIT License:
+ *
+ * Copyright (c) David Heinemeier Hansson
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 function isPlainObject(value) {
   return !!value && typeof value === "object" && !Array.isArray(value)
 }
@@ -296,6 +324,43 @@ function barSizeFor(sizes, screenName, fallback) {
   return size > 0 ? size : fallback
 }
 
+// Mirrors stock Omarchy's PluginRegistry.isEnabled() for third-party plugins:
+// enabled iff not listed in disabledPlugins[] and referenced in bar.id,
+// bar.layout.*, or plugins[] (without enabled === false).
+function isPluginStockEnabled(shellConfig, pluginId) {
+  var key = canonicalWidgetId(pluginId)
+  if (!isSafePluginId(key)) return false
+  if (!isPlainObject(shellConfig)) return false
+  if (Array.isArray(shellConfig.disabledPlugins)) {
+    for (var d = 0; d < shellConfig.disabledPlugins.length; d++) {
+      if (canonicalWidgetId(shellConfig.disabledPlugins[d]) === key) return false
+    }
+  }
+  if (isPlainObject(shellConfig.bar)) {
+    if (canonicalWidgetId(shellConfig.bar.id || "") === key) return true
+    if (isPlainObject(shellConfig.bar.layout)) {
+      var sections = ["left", "centerBegin", "center", "centerEnd", "right", "tray"]
+      for (var s = 0; s < sections.length; s++) {
+        var entries = shellConfig.bar.layout[sections[s]]
+        if (!Array.isArray(entries)) continue
+        for (var i = 0; i < entries.length; i++) {
+          if (entryId(entries[i]) === key) return true
+        }
+      }
+    }
+  }
+  if (Array.isArray(shellConfig.plugins)) {
+    for (var j = 0; j < shellConfig.plugins.length; j++) {
+      var p = shellConfig.plugins[j]
+      if (entryId(p) === key) {
+        if (isPlainObject(p) && p.enabled === false) return false
+        return true
+      }
+    }
+  }
+  return false
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     barSizeFor: barSizeFor,
@@ -308,6 +373,7 @@ if (typeof module !== "undefined") {
     fixedEdgeForRegion: fixedEdgeForRegion,
     isDrawnSlot: isDrawnSlot,
     isPlainObject: isPlainObject,
+    isPluginStockEnabled: isPluginStockEnabled,
     isSafeEntryPoint: isSafeEntryPoint,
     isSafePluginId: isSafePluginId,
     notchFloor: notchFloor,

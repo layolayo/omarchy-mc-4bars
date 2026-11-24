@@ -495,6 +495,34 @@ def ensure_plugin_enabled(cfg: dict, plugin_id: str) -> bool:
     return True
 
 
+def is_plugin_stock_enabled(cfg: dict, plugin_id: str) -> bool:
+    """Mirror stock Omarchy's PluginRegistry.isEnabled() for third-party plugins."""
+    key = (plugin_id or "").strip()
+    if not key or not isinstance(cfg, dict):
+        return False
+    disabled = cfg.get("disabledPlugins")
+    if isinstance(disabled, list) and any(entry_id(x) == key for x in disabled):
+        return False
+    bar = cfg.get("bar")
+    if isinstance(bar, dict):
+        if str(bar.get("id", "")).strip() == key:
+            return True
+        layout = bar.get("layout")
+        if isinstance(layout, dict):
+            for sec in RAW_SECTIONS:
+                items = layout.get(sec)
+                if isinstance(items, list) and any(entry_id(x) == key for x in items):
+                    return True
+    plugins = cfg.get("plugins")
+    if isinstance(plugins, list):
+        for p in plugins:
+            if entry_id(p) == key:
+                if isinstance(p, dict) and p.get("enabled") is False:
+                    return False
+                return True
+    return False
+
+
 def get_section_items(layout: dict, sec: str) -> list:
     """Return items in a logical section ('center' combines centerBegin + center + centerEnd)."""
     if not isinstance(layout, dict):
@@ -638,6 +666,88 @@ def print_layout(cfg: dict) -> None:
             joined = ", ".join(ids) if ids else "(empty)"
             print(f"  {label:10}: {joined}")
         print()
+
+
+def tui_cycle_background(slot_key: str) -> str:
+    """Re-read shell.json fresh from disk and cycle only slot_key's background."""
+    cfg = load_config()
+    ensure_all_bars(cfg)
+    bbar = cfg[slot_key]
+    order = ["none", "glassy", "opaque"]
+    cur = bbar.get("background", "none")
+    nxt = order[(order.index(cur) + 1) % len(order)] if cur in order else "none"
+    bbar["background"] = nxt
+    save_config(cfg)
+    return nxt
+
+
+def tui_remove_widget(slot_key: str, eid: str) -> bool:
+    """Re-read shell.json fresh from disk and remove eid from slot_key."""
+    cfg = load_config()
+    ensure_all_bars(cfg)
+    popped = pop_from_layout(cfg[slot_key]["layout"], eid)
+    if popped is None:
+        return False
+    save_config(cfg)
+    return True
+
+
+def tui_reorder_widget(slot_key: str, sec_key: str, eid: str, delta: int) -> bool:
+    """Re-read shell.json fresh from disk and reorder eid within sec_key."""
+    cfg = load_config()
+    ensure_all_bars(cfg)
+    layout = cfg[slot_key]["layout"]
+    items = get_section_items(layout, sec_key)
+    cur_idx = next((i for i, item in enumerate(items) if entry_id(item) == eid), -1)
+    if cur_idx == -1:
+        return False
+    new_idx = cur_idx + delta
+    if not (0 <= new_idx < len(items)):
+        return False
+    items[cur_idx], items[new_idx] = items[new_idx], items[cur_idx]
+    set_section_items(slot_key, layout, sec_key, items)
+    save_config(cfg)
+    return True
+
+
+def tui_move_widget_section(slot_key: str, eid: str, target_sec: str) -> tuple[bool, str]:
+    """Re-read shell.json fresh from disk and move eid to target_sec within slot_key."""
+    cfg = load_config()
+    ensure_all_bars(cfg)
+    bbar = cfg[slot_key]
+    if target_sec == "tray" and not layout_has_tray(bbar["layout"]):
+        return False, "No Tray on this bar — move 'omarchy.tray' to this bar first."
+    if target_sec == "tray" and eid == "omarchy.tray":
+        return False, "'omarchy.tray' hosts the tray drawer and cannot be placed inside itself."
+    popped = pop_from_layout(bbar["layout"], eid)
+    if popped is None:
+        return False, f"'{eid.split('.')[-1]}' is no longer on this bar."
+    sec_items = get_section_items(bbar["layout"], target_sec)
+    sec_items.append(popped)
+    set_section_items(slot_key, bbar["layout"], target_sec, sec_items)
+    save_config(cfg)
+    return True, bbar.get("position", "bottom").upper()
+
+
+def tui_send_widget_to_edge(slot_key: str, sec_key: str, eid: str, target_edge: str) -> tuple[bool, str, bool]:
+    """Re-read shell.json fresh from disk and send eid from slot_key to target_edge."""
+    cfg = load_config()
+    ensure_all_bars(cfg)
+    dest_slot = resolve_bar_slot(cfg, target_edge)
+    was_enabled = is_plugin_stock_enabled(cfg, eid)
+    popped = pop_from_layout(cfg[slot_key]["layout"], eid)
+    if popped is None:
+        return False, dest_slot, False
+    dest_sec = sec_key
+    if dest_sec == "tray" and not layout_has_tray(cfg[dest_slot]["layout"]):
+        dest_sec = "right" if dest_slot == "bar" else "center"
+    dest_items = get_section_items(cfg[dest_slot]["layout"], dest_sec)
+    dest_items.append(popped)
+    set_section_items(dest_slot, cfg[dest_slot]["layout"], dest_sec, dest_items)
+    if was_enabled and dest_slot != "bar" and not eid.startswith("omarchy."):
+        ensure_plugin_enabled(cfg, eid)
+    save_config(cfg)
+    return True, dest_slot, (slot_key == "bar" or dest_slot == "bar")
 
 
 def run_tui() -> None:
@@ -896,10 +1006,12 @@ def run_tui() -> None:
                 pr_short = pr_eid.split(".")[-1]
                 pending_remove = None
                 if ch in (ord("y"), ord("Y")):
-                    pop_from_layout(cfg[pr_slot]["layout"], pr_eid)
-                    save_config(cfg)
-                    _tui_reload(pr_slot == "bar")
-                    status_msg = f"Removed '{pr_short}' ({pr_eid}) from {pr_pos} bar ({pr_slot})."
+                    if tui_remove_widget(pr_slot, pr_eid):
+                        _tui_reload(pr_slot == "bar")
+                        status_msg = f"Removed '{pr_short}' ({pr_eid}) from {pr_pos} bar ({pr_slot})."
+                    else:
+                        stdscr.clear()
+                        status_msg = f"'{pr_short}' was already removed from {pr_pos} bar."
                 else:
                     stdscr.clear()
                     status_msg = f"Cancelled removal of '{pr_short}'."
@@ -945,25 +1057,16 @@ def run_tui() -> None:
                 )
                 break
             elif ch in (ord("g"), ord("G")):
-                order = ["none", "glassy", "opaque"]
-                cur = bbar.get("background", "none")
-                nxt = order[(order.index(cur) + 1) % len(order)] if cur in order else "none"
-                bbar["background"] = nxt
-                save_config(cfg)
+                nxt = tui_cycle_background(slot_key)
                 _tui_reload(slot_key == "bar")
                 status_msg = f"Set {slot_key} background to '{nxt}'."
             elif flat_rows and ch in (ord("x"), ord("X"), ord("d"), ord("D"), curses.KEY_DC, curses.KEY_BACKSPACE, 127):
                 _sk, _sl, _idx, eid, _dli = flat_rows[row_idx]
                 pending_remove = (slot_key, pos.upper(), eid)
             elif flat_rows and ch in (ord("["), ord("]")):
-                sec_key, sec_label, idx, eid, _dli = flat_rows[row_idx]
-                items = get_section_items(bbar["layout"], sec_key)
+                sec_key, sec_label, _idx, eid, _dli = flat_rows[row_idx]
                 delta = -1 if ch == ord("[") else 1
-                new_idx = idx + delta
-                if 0 <= new_idx < len(items):
-                    items[idx], items[new_idx] = items[new_idx], items[idx]
-                    set_section_items(slot_key, bbar["layout"], sec_key, items)
-                    save_config(cfg)
+                if tui_reorder_widget(slot_key, sec_key, eid, delta):
                     _tui_reload(slot_key == "bar")
                     follow_eid = eid
                     status_msg = f"Reordered '{eid.split('.')[-1]}' in {sec_label}."
@@ -986,19 +1089,13 @@ def run_tui() -> None:
                 }
                 target_sec = sec_key_map[ch]
                 _sk, _sl, _idx, eid, _dli = flat_rows[row_idx]
-                if target_sec == "tray" and not has_tray:
-                    status_msg = "No Tray on this bar — move 'omarchy.tray' to this bar first."
-                elif target_sec == "tray" and eid == "omarchy.tray":
-                    status_msg = "'omarchy.tray' hosts the tray drawer and cannot be placed inside itself."
-                else:
-                    popped = pop_from_layout(bbar["layout"], eid) or {"id": eid}
-                    sec_items = get_section_items(bbar["layout"], target_sec)
-                    sec_items.append(popped)
-                    set_section_items(slot_key, bbar["layout"], target_sec, sec_items)
-                    save_config(cfg)
+                ok, detail = tui_move_widget_section(slot_key, eid, target_sec)
+                if ok:
                     _tui_reload(slot_key == "bar")
                     follow_eid = eid
-                    status_msg = f"Moved '{eid.split('.')[-1]}' to {sec_label_map[target_sec]} on {pos.upper()} bar."
+                    status_msg = f"Moved '{eid.split('.')[-1]}' to {sec_label_map[target_sec]} on {detail} bar."
+                else:
+                    status_msg = detail
             elif flat_rows and ch in (ord("t"), ord("b"), ord("l"), ord("r"), ord("T"), ord("B"), ord("L"), ord("R")):
                 edge_map = {
                     ord("t"): "top",
@@ -1011,18 +1108,13 @@ def run_tui() -> None:
                     ord("R"): "right",
                 }
                 target_edge = edge_map[ch]
-                dest_slot = resolve_bar_slot(cfg, target_edge)
                 sec_key, _sl, _idx, eid, _dli = flat_rows[row_idx]
-                dest_sec = sec_key
-                if dest_sec == "tray" and not layout_has_tray(cfg[dest_slot]["layout"]):
-                    dest_sec = "right" if dest_slot == "bar" else "center"
-                popped = pop_from_layout(bbar["layout"], eid) or {"id": eid}
-                dest_items = get_section_items(cfg[dest_slot]["layout"], dest_sec)
-                dest_items.append(popped)
-                set_section_items(dest_slot, cfg[dest_slot]["layout"], dest_sec, dest_items)
-                save_config(cfg)
-                _tui_reload(slot_key == "bar" or dest_slot == "bar")
-                status_msg = f"Sent '{eid.split('.')[-1]}' → {target_edge.upper()} bar ({dest_slot})."
+                ok, dest_slot, touch_primary = tui_send_widget_to_edge(slot_key, sec_key, eid, target_edge)
+                if ok:
+                    _tui_reload(touch_primary)
+                    status_msg = f"Sent '{eid.split('.')[-1]}' → {target_edge.upper()} bar ({dest_slot})."
+                else:
+                    status_msg = f"'{eid.split('.')[-1]}' is no longer on this bar."
 
     curses.wrapper(_tui_main)
 
@@ -1091,6 +1183,9 @@ def cmd_move(plugin_id_raw: str, section_raw: str, extra_args: list, target_bar_
         sec_items = get_section_items(dest_bar["layout"], sec)
         insert_into_section(sec_items, entry, before=before, after=after, index=index)
         set_section_items(dest_slot, dest_bar["layout"], sec, sec_items)
+        if dest_slot != "bar" and not plugin_id.startswith("omarchy."):
+            if ensure_plugin_enabled(cfg, plugin_id):
+                rescan_needed = True
         if after:
             after = plugin_id
 
@@ -1305,6 +1400,8 @@ def main() -> None:
             if ans not in ("y", "yes"):
                 print("Cancelled.")
                 return
+            cfg = load_config()
+            ensure_all_bars(cfg)
 
         pop_from_layout(cfg[slot_key]["layout"], target_eid)
         save_config(cfg)
