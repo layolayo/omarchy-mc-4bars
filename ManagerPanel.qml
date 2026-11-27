@@ -265,10 +265,24 @@ PanelWindow {
     return layoutHasTray(barObj ? barObj.layout : null)
   }
 
+  function ensurePluginEnabled(cfg, pluginId) {
+    if (!Array.isArray(cfg.plugins)) cfg.plugins = []
+    for (var i = 0; i < cfg.plugins.length; i++) {
+      if (BarModel.entryId(cfg.plugins[i]) === pluginId) {
+        if (BarModel.isPlainObject(cfg.plugins[i]) && cfg.plugins[i].enabled === false) {
+          cfg.plugins[i].enabled = true
+        }
+        return
+      }
+    }
+    cfg.plugins.push({ id: pluginId })
+  }
+
   function moveWidget(pluginId, destBarKey, destSection) {
     if (!BarModel.isSafePluginId(pluginId)) return
     Qt.callLater(function() {
       mutateShellConfig(function(cfg) {
+        var wasEnabled = BarModel.isPluginStockEnabled(cfg, pluginId)
         var entry = null
         for (var i = 0; i < root.barSlotKeys.length; i++) {
           var k = root.barSlotKeys[i]
@@ -284,6 +298,9 @@ PanelWindow {
         var secItems = getLayoutSectionEntries(targetLayout, finalSec)
         secItems.push(entry)
         setLayoutSectionEntries(destBarKey, targetLayout, finalSec, secItems)
+        if (wasEnabled && destBarKey !== "bar" && pluginId.indexOf("omarchy.") !== 0) {
+          ensurePluginEnabled(cfg, pluginId)
+        }
       }, true)
     })
   }

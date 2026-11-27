@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.layolayo.mc-4bars",
   "name": "MC 4Bars",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "Matthew (layolayo)",
   "description": "Quad-edge status bar system for Omarchy (Top, Bottom, Left, Right) with automatic bar-swap on move, lazy instantiation, warm off-screen parking, drag-and-drop sections (L, M, R), fullscreen auto-conceal, and a visual 4-Bar Layout Manager",
   "homepage": "https://github.com/layolayo/omarchy-mc-4bars",
@@ -12,7 +12,6 @@
     "panel",
     "bar-widget"
   ],
-  "keepLoaded": true,
   "barWidget": {
     "displayName": "MC 4Bars",
     "description": "Quad-edge status bar layout manager",

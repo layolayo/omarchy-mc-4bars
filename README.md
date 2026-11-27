@@ -140,6 +140,9 @@ omarchy-mc-4bars remove io.github.layolayo.mc-4bars -y
 
 # Clean any uninstalled/invalid widget entries across all 4 bars
 omarchy-mc-4bars clean
+
+# Re-enable secondary-bar third-party widgets in shell.json plugins[] (respecting disabledPlugins)
+omarchy-mc-4bars repair
 ```
 
 Direct IPC targets via `omarchy-shell`:

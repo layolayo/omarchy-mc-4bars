@@ -173,6 +173,7 @@ Item {
   // per-plugin capability-scoped shell/bar facades so plugins cannot traverse the
   // QObject parent hierarchy or access another plugin's live service/settings.
   readonly property var _localManifestCache: new Map()
+  readonly property var _firstPartyManifestCache: new Map()
   property var _localServices: ({})
   property var _localPanels: ({})
   property var _localShellFacades: ({})
@@ -325,6 +326,53 @@ Item {
       console.warn("io.github.layolayo.mc-4bars: bad manifest for " + id + ":", e)
       return null
     }
+  }
+
+  function firstPartyManifestFor(pluginId, sourceDir) {
+    var id = root.canonicalWidgetId(String(pluginId || ""))
+    var dir = String(sourceDir || "").replace(/\/+$/, "")
+    var allowedPrefix = String(root.omarchyPath || "").replace(/\/+$/, "") + "/shell/plugins/"
+    if (!BarModel.isSafePluginId(id) || !dir || !root.omarchyPath) return null
+    if (dir.indexOf("..") !== -1 || dir.indexOf(allowedPrefix) !== 0) return null
+    var cacheKey = id + "::" + dir
+    if (root._firstPartyManifestCache.has(cacheKey)) {
+      return root.cloneManifestSnapshot(root._firstPartyManifestCache.get(cacheKey))
+    }
+    var shortName = id.indexOf(".") !== -1 ? id.slice(id.lastIndexOf(".") + 1) : id
+    var pascalName = shortName.split(/[-_]+/).map(function(part) {
+      return part ? (part.charAt(0).toUpperCase() + part.slice(1)) : ""
+    }).join("")
+    var candidates = [dir + "/manifest.json"]
+    if (pascalName) candidates.push(dir + "/" + pascalName + ".manifest.json")
+    for (var i = 0; i < candidates.length; i++) {
+      var reader = manifestReaderComponent.createObject(null, { path: candidates[i] })
+      if (!reader) continue
+      var raw = String(reader.text() || "").trim()
+      reader.destroy()
+      if (!raw) continue
+      try {
+        var parsed = JSON.parse(raw)
+        if (!BarModel.isPlainObject(parsed) || parsed.schemaVersion !== 1) continue
+        if (String(parsed.id || "") !== id) continue
+        if (!BarModel.isPlainObject(parsed.entryPoints)) continue
+        var safeEps = true
+        for (var epKey in parsed.entryPoints) {
+          if (!BarModel.isSafeEntryPoint(parsed.entryPoints[epKey])) {
+            safeEps = false
+            break
+          }
+        }
+        if (!safeEps) continue
+        delete parsed.__isFirstParty
+        delete parsed.__hostCapabilities
+        parsed.__sourceDir = dir
+        root._firstPartyManifestCache.set(cacheKey, parsed)
+        return root.cloneManifestSnapshot(parsed)
+      } catch (e) {
+        console.warn("io.github.layolayo.mc-4bars: bad first-party manifest for " + id + ":", e)
+      }
+    }
+    return null
   }
 
   function pluginCloneMaySummon(manifest, requestedId) {
@@ -2473,7 +2521,8 @@ Item {
     readonly property var moduleSettings: {
       var raw = root.entrySettings(entry)
       var defaults = (localManifest && localManifest.barWidget && BarModel.isPlainObject(localManifest.barWidget.defaults))
-        ? localManifest.barWidget.defaults : {}
+        ? localManifest.barWidget.defaults
+        : ((registryMetadata && BarModel.isPlainObject(registryMetadata.defaults)) ? registryMetadata.defaults : {})
       var merged = {}
       for (var dk in defaults) merged[dk] = defaults[dk]
       for (var rk in raw) merged[rk] = raw[rk]
@@ -2484,12 +2533,18 @@ Item {
       return root.barWidgetRegistry ? root.barWidgetRegistry.metadataFor(root.canonicalWidgetId(moduleName)) : null
     }
     readonly property bool firstParty: registryMetadata && registryMetadata.firstParty === true
-    readonly property string pluginApiId: registered ? root.canonicalWidgetId(moduleName) : "bar-entry:" + moduleName
+    readonly property string pluginApiId: (registered || firstParty) ? root.canonicalWidgetId(moduleName) : "bar-entry:" + moduleName
     readonly property var registryComponent: {
       var rev = root.barWidgetRegistry ? root.barWidgetRegistry.revision : 0
       var w = root.barWidgetRegistry && root.barWidgetRegistry.widgets ? root.barWidgetRegistry.widgets : ({})
       var registryName = root.canonicalWidgetId(moduleName)
       return w[registryName] ? w[registryName].component : null
+    }
+    readonly property var firstPartyManifest: firstParty && !registered && registryMetadata && registryMetadata.sourceDir
+      ? root.firstPartyManifestFor(moduleName, registryMetadata.sourceDir) : null
+    readonly property bool firstPartyEnabled: {
+      var rev = root.shellConfigRevision
+      return firstParty && BarModel.isFirstPartyEnabled(root.shellConfigSnapshot, moduleName)
     }
     readonly property bool thirdPartyEnabled: {
       var rev = root.shellConfigRevision
@@ -2497,6 +2552,13 @@ Item {
     }
     readonly property string localWidgetUrl: {
       if (registered) return ""
+      if (firstParty) {
+        if (!firstPartyEnabled) return ""
+        if (firstPartyManifest && firstPartyManifest.entryPoints && BarModel.isSafeEntryPoint(firstPartyManifest.entryPoints.barWidget)) {
+          return BarModel.fileUrl(firstPartyManifest.__sourceDir + "/" + firstPartyManifest.entryPoints.barWidget)
+        }
+        return ""
+      }
       if (!thirdPartyEnabled) return ""
       if (localManifest && localManifest.entryPoints && BarModel.isSafeEntryPoint(localManifest.entryPoints.barWidget)) {
         return BarModel.fileUrl(localManifest.__sourceDir + "/" + localManifest.entryPoints.barWidget)

@@ -255,6 +255,39 @@ class Mc4BarsCliTests(unittest.TestCase):
         self.assertEqual(saved3["plugins"], [{"id": "io.github.layolayo.mc-4bars"}])
         self.assertNotIn("omarchy.workspaces", saved3["bar"]["layout"]["right"])
 
+    def test_sync_visibility_is_read_only_on_shell_json_and_repair_backfills_explicitly(self):
+        cfg = json.loads(self.shell_json.read_text(encoding="utf-8"))
+        cfg["plugins"] = [
+            {"id": "io.github.layolayo.mc-4bars"},
+            {"id": "thirdparty.explicit-off", "enabled": False},
+        ]
+        cfg["disabledPlugins"] = ["thirdparty.disabled"]
+        cfg["bottomBar"]["layout"]["center"] = [
+            {"id": "thirdparty.legacy-widget"},
+            {"id": "thirdparty.explicit-off"},
+            {"id": "thirdparty.disabled"},
+            {"id": "omarchy.clock"},
+        ]
+        self.shell_json.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+
+        # Startup sync-visibility must NEVER mutate shell.json or re-enable disabled plugins
+        res = self.run_cli("sync-visibility")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        after_sync = json.loads(self.shell_json.read_text(encoding="utf-8"))
+        self.assertEqual(after_sync["plugins"], cfg["plugins"])
+
+        # Explicit user-invoked `repair` backfills missing secondary-bar third-party plugins
+        # while respecting disabledPlugins[] and {enabled: false}
+        res_rep = self.run_cli("repair")
+        self.assertEqual(res_rep.returncode, 0, res_rep.stderr)
+        saved = json.loads(self.shell_json.read_text(encoding="utf-8"))
+        plugin_ids = [p["id"] if isinstance(p, dict) else p for p in saved["plugins"]]
+        self.assertIn("thirdparty.legacy-widget", plugin_ids)
+        self.assertNotIn("thirdparty.disabled", plugin_ids)
+        self.assertNotIn("omarchy.clock", plugin_ids)
+        off_entry = next(p for p in saved["plugins"] if isinstance(p, dict) and p.get("id") == "thirdparty.explicit-off")
+        self.assertIs(off_entry.get("enabled"), False)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

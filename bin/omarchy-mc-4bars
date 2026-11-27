@@ -404,6 +404,41 @@ def save_visibility_state(state: dict) -> dict:
     return clean
 
 
+def repair_secondary_plugins(cfg: dict) -> list[str]:
+    """Ensure third-party widgets on secondary bars are listed in plugins[] unless explicitly disabled."""
+    if not isinstance(cfg, dict):
+        return []
+    disabled = {
+        entry_id(x) for x in (cfg.get("disabledPlugins") or []) if entry_id(x)
+    }
+    explicitly_disabled = set()
+    for p in cfg.get("plugins") or []:
+        pid = entry_id(p)
+        if pid and isinstance(p, dict) and p.get("enabled") is False:
+            explicitly_disabled.add(pid)
+
+    added: list[str] = []
+    for slot_key in SECONDARY_SLOTS:
+        layout = (cfg.get(slot_key) or {}).get("layout")
+        if not isinstance(layout, dict):
+            continue
+        for sec in RAW_SECTIONS:
+            items = layout.get(sec)
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                eid = entry_id(item)
+                if not eid or eid.startswith("omarchy."):
+                    continue
+                if eid in disabled or eid in explicitly_disabled:
+                    continue
+                if is_plugin_stock_enabled(cfg, eid):
+                    continue
+                if ensure_plugin_enabled(cfg, eid):
+                    added.append(eid)
+    return added
+
+
 def sync_visibility_state() -> dict:
     had_legacy_auto = False
     legacy_auto_marker = LEGACY_TOGGLES_DIR / "mc-4bars-auto-bar-off"
@@ -1296,6 +1331,21 @@ def main() -> None:
         call_ipc("reloadConfig")
         for slot_k, bad_id in pruned:
             print(f"Removed invalid plugin entry '{bad_id}' from {slot_k}.")
+        return
+
+    if sub == "repair":
+        cfg = load_config()
+        ensure_all_bars(cfg)
+        added = repair_secondary_plugins(cfg)
+        if not added:
+            print("All secondary-bar third-party plugins are already enabled in shell.json.")
+            return
+        save_config(cfg)
+        subprocess.run([omarchy_bin("omarchy-shell"), "-q", "shell", "rescanPlugins"], timeout=2.0, check=False)
+        subprocess.run([omarchy_bin("omarchy-shell"), "-q", "shell", "reloadConfig"], timeout=2.0, check=False)
+        call_ipc("reloadConfig")
+        for pid in added:
+            print(f"Enabled secondary-bar plugin '{pid}' in shell.json plugins[].")
         return
 
     if sub in ("tui", "ui", "interactive", "i"):

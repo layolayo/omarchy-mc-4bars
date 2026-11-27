@@ -139,6 +139,12 @@ function runTests() {
   assert.strictEqual(BarModel.isPluginStockEnabled(stockCfg, "thirdparty.secondaryonly"), false);
   assert.strictEqual(BarModel.isPluginStockEnabled(null, "thirdparty.svc"), false);
 
+  // 9. First-party enabled-state checks
+  assert.strictEqual(BarModel.isFirstPartyEnabled(stockCfg, "omarchy.clock"), true);
+  assert.strictEqual(BarModel.isFirstPartyEnabled({ disabledPlugins: ["omarchy.clock"] }, "omarchy.clock"), false);
+  assert.strictEqual(BarModel.isFirstPartyEnabled(null, "omarchy.clock"), true);
+  assert.strictEqual(BarModel.isFirstPartyEnabled(stockCfg, "../bad"), false);
+
   console.log("PASS: BarModel.js unit tests (all assertions succeeded)");
 }
 

@@ -277,7 +277,7 @@ cat > "$WL_CONFIG/omarchy/shell.json" <<'EOF'
     "position": "bottom",
     "background": "glassy",
     "layout": {
-      "left": ["firstparty.sample"],
+      "left": ["firstparty.sample", "omarchy.spacer"],
       "center": ["test.thirdparty.demo"],
       "right": ["firstparty.trayhost"],
       "tray": ["firstparty.traychild"]
@@ -354,9 +354,17 @@ ShellRoot {
     property var widgets: ({
       "firstparty.sample": { component: sampleFirstPartyComp },
       "firstparty.trayhost": { component: trayHostComp },
-      "firstparty.traychild": { component: sampleFirstPartyComp }
+      "firstparty.traychild": { component: sampleFirstPartyComp },
+      "omarchy.spacer": { component: null }
     })
     function metadataFor(id) {
+      if (id === "omarchy.spacer") {
+        return {
+          id: "omarchy.spacer",
+          firstParty: true,
+          sourceDir: "$OMARCHY_PATH/shell/plugins/bar/widgets"
+        }
+      }
       if (id.indexOf("firstparty.") === 0) return { id: id, firstParty: true }
       return null
     }
@@ -444,9 +452,11 @@ ShellRoot {
 
         if (screenCount > 0) {
           var sampleItems = bottomBar.moduleWidgets("firstparty.sample")
+          var lazySpacerItems = bottomBar.moduleWidgets("omarchy.spacer")
           var demoItems = bottomBar.moduleWidgets("test.thirdparty.demo")
           var trayChildItems = bottomBar.moduleWidgets("firstparty.traychild")
           checks.sampleLoaded = sampleItems.length > 0
+          checks.lazyFirstPartyLoaded = lazySpacerItems.length > 0
           checks.demoLoaded = demoItems.length > 0
           checks.trayChildLoaded = trayChildItems.length > 0
 

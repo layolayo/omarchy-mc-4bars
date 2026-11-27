@@ -361,6 +361,19 @@ function isPluginStockEnabled(shellConfig, pluginId) {
   return false
 }
 
+// Mirrors stock Omarchy's PluginRegistry.isEnabled() for first-party plugins:
+// enabled unless explicitly listed in disabledPlugins[].
+function isFirstPartyEnabled(shellConfig, pluginId) {
+  var key = canonicalWidgetId(pluginId)
+  if (!isSafePluginId(key)) return false
+  if (isPlainObject(shellConfig) && Array.isArray(shellConfig.disabledPlugins)) {
+    for (var d = 0; d < shellConfig.disabledPlugins.length; d++) {
+      if (canonicalWidgetId(shellConfig.disabledPlugins[d]) === key) return false
+    }
+  }
+  return true
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     barSizeFor: barSizeFor,
@@ -372,6 +385,7 @@ if (typeof module !== "undefined") {
     fileUrl: fileUrl,
     fixedEdgeForRegion: fixedEdgeForRegion,
     isDrawnSlot: isDrawnSlot,
+    isFirstPartyEnabled: isFirstPartyEnabled,
     isPlainObject: isPlainObject,
     isPluginStockEnabled: isPluginStockEnabled,
     isSafeEntryPoint: isSafeEntryPoint,
